@@ -10,10 +10,11 @@ Design documents:
 
 ## Status
 
-**Broker connected** (Exness cent account) and the strategy restructured to
-multi-timeframe: H1/H4 for bias, M5/M15/M30 for entry. See BROKER_FINDINGS.md —
-the short version is that M5 is not viable at this broker's spreads, and the one
-configuration that survived the timeframe sweep was then blocked by the gauntlet.
+**Broker connected** (IC Markets demo) with 10-28 years of history per symbol,
+and the strategy restructured to multi-timeframe: H1/H4 for bias, M5/M15/M30 for
+entry. See [BROKER_FINDINGS.md](BROKER_FINDINGS.md) for measured specs, spreads
+and the server-timezone correction, and [RESEARCH_LOG.md](RESEARCH_LOG.md) for
+what has been tested and why it died.
 
 **Phase 4 — AI layer, feature complete.** Regime model, meta-labelling with
 triple-barrier labels, purged/embargoed CV, CPCV, deflated Sharpe, PBO, Monte

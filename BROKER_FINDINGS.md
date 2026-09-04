@@ -1,110 +1,88 @@
-# Broker findings — 2026-09-04
+# Broker findings
 
-Read live from the terminal. Everything here is measured, not assumed.
+Everything here is **measured from the live terminal**, not assumed. Re-run
+`scripts/snapshot_broker.py` against your own account before trusting any of it.
+
+> **History note.** This session began on an Exness cent account (43 symbols,
+> zero balance, no indices, 8-point EURUSD spread) and the terminal later
+> switched to IC Markets. Conclusions drawn on the first account are archived in
+> `RESEARCH_LOG.md` and do **not** transfer: cent contracts are 1/100th the size
+> and the spreads differ by 8x, so costs from one broker are meaningless for the
+> other. That old bar store is kept at `data/bars_exness_archived`.
 
 ## Account
 
 | | |
 |---|---|
-| Broker | Exness Technologies Ltd |
-| Server | `Exness-MT5Real34` |
-| Login | <redacted> |
-| Trade mode | **CONTEST** |
-| Balance | **0.00 USC** |
-| Currency | USC (US cents) |
-| Algo trading | enabled |
+| Broker | Raw Trading Ltd (IC Markets) |
+| Server | `ICMarketsSC-Demo` |
+| Balance | 103,391.20 USD |
+| Leverage | 1:5000 |
+| Symbols | 7,391 |
+| Algo trading | **disabled** - enable it in the terminal before anything can execute |
 
-**Nothing can be traded.** The balance is zero. Separately, the mode reports
-CONTEST on a server named "Real", which is worth resolving with the broker before
-depositing anything.
+## Specs and measured spreads
 
-## What this broker actually offers
+| Symbol | Min lot | $/1.0 move | Spread | Swap long / short |
+|---|---|---|---|---|
+| EURUSD | 0.01 | 100,000 | 0.5-1.0 pts | -8.17 / +1.45 |
+| GBPUSD | 0.01 | 100,000 | 1.0-1.5 pts | -3.83 / -4.18 |
+| USDJPY | 0.01 | 639.5 | 1.0-2.0 pts | +7.97 / -16.67 |
+| XAUUSD | 0.01 | 100 | 9.0 pts | -57.55 / **+39.88** |
+| US30 | 0.10 | 1.0 | 120 pts | -12.24 / -0.56 |
+| US500 | 0.10 | 1.0 | 50 pts | -1.77 / -0.08 |
 
-43 symbols: FX majors and crosses, XAUUSD, XAGUSD, and a little crypto.
+Gold pays you to hold shorts (+39.88) and charges heavily for longs (-57.55).
+Any strategy holding gold overnight should know which side it is on.
 
-**No indices.** US30, US500, NAS100 — none are available. The index half of the
-original plan cannot be traded on this account at all.
+## Server timezone - read this before writing any time-based rule
 
-Every symbol carries a `c` suffix (cent account): `EURUSDc`, `XAUUSDc`. Aliases
-are mapped in `config/instruments.yaml`.
+**The server runs UTC+3 in US daylight saving and UTC+2 otherwise.** MT5 hands
+you epochs from that clock, not UTC, and the Python package does not tell you.
 
-## Specs, live
+Established from the data rather than assumed: the US cash open is the sharpest
+recurring event in the set, and on US30 M15 it sits at **16:30 server time in
+both summer and winter**. That can only hold across the DST boundary if the
+server clock shifts with US DST, which puts server midnight at the 17:00 New
+York close.
 
-| Symbol | Contract | Min lot | $/1.0 move | Spread | Swap long/short |
-|---|---|---|---|---|---|
-| EURUSDc | 1,000 | 0.01 | 100,000 USC | 8.0 pts | -5.70 / 0 |
-| GBPUSDc | 1,000 | 0.01 | 100,000 USC | 10.0 pts | -1.30 / -1.60 |
-| USDJPYc | 1,000 | 0.01 | 639.6 USC | 10.0 pts | 0 / -13.30 |
-| XAUUSDc | 1 oz | 0.01 | 100 USC | 260 pts | **-512.30** / 0 |
+`execution/brokertime.py` does the conversion and `verify_offset()` re-checks it
+on every connect, because a broker changing its server timezone should stop the
+system rather than silently shift a year of research.
 
-The cent contract sizes **solve the small-account lot problem entirely**. The
-earlier finding that gold and indices were blocked below ~25,000 was based on
-standard-account specs; here the minimum position is 1/100th the size and
-granularity is no longer a constraint.
+After the fix, the cash open lands at 13:30 UTC in summer and 14:30 in winter -
+which is correct, and is asserted in `tests/test_brokertime.py`.
 
-`XAUUSDc` financing on longs is -512.30 cents per lot per night. The M5 ATR on
-gold is around 400 cents. **One night of financing costs more than four
-five-minute ranges of movement**, so gold longs cannot be held overnight here.
+## History depth
 
-## History available
+The terminal caps a request at the "Max bars in chart" setting; above it the call
+returns **nothing at all** rather than a truncated series. Raised here to
+Unlimited (Tools > Options > Charts).
 
-The terminal caps a single request at ~50,000 bars; above that it returns nothing
-rather than a truncated series. `copy_rates_range` fails outright on this
-terminal. Raise Tools > Options > Charts > "Max bars in chart" to get deeper
-intraday history.
-
-| TF | Bars | Span | Validatable? |
+| TF | EURUSD | XAUUSD | US30 / US500 |
 |---|---|---|---|
-| M5 | 50,000 | **241–258 days** | no — too short for walk-forward |
-| M15 | 50,000 | 736–773 days | marginal |
-| M30 | 50,000 | 1,467–1,547 days | yes |
-| H1 | 50,000 | ~8 years | yes |
-| H4 | 16,000 | ~11 years | yes |
-| D1 | 3,900 | ~12 years | yes |
+| M5 | 800k / 10.7y | 680k / 28y | 671k / 14y |
+| M15 | 300k / 12y | 235k / 28y | 229k / 14y |
+| M30 | 150k / 12y | 123k / 28y | 119k / 14y |
+| H1 | 100k / 16y | 68k / 28y | 64k / 14y |
+| D1 | 8k / 31y | 7.5k / 28y | 3.6k / 14y |
 
-## Timeframe sweep — the answer on M5
+Before raising the setting, M5 reached back only 241 days - too short to
+walk-forward validate anything.
 
-`MTFPullback`, H4+H1 bias, real spreads, 9 configurations:
+## Cost arithmetic by stop timeframe
 
-| Symbol | Exec | Trades | Win | Payoff | Expectancy | Sharpe | cost/stop |
-|---|---|---|---|---|---|---|---|
-| EURUSD | M5 | 128 | 15.6% | 3.93 | -0.252 | -0.56 | **22.4%** |
-| EURUSD | M15 | 173 | 27.2% | 2.03 | -0.182 | -0.33 | 12.6% |
-| EURUSD | M30 | 33 | 18.2% | 1.76 | -0.485 | -0.84 | 6.9% |
-| GBPUSD | M5 | 41 | 9.8% | 4.68 | -0.506 | -1.19 | **23.9%** |
-| GBPUSD | M15 | 169 | 29.0% | 1.85 | -0.179 | -0.40 | 13.5% |
-| GBPUSD | M30 | 325 | 28.0% | 2.16 | -0.116 | -0.22 | 10.1% |
-| XAUUSD | M5 | 33 | 12.1% | 3.26 | -0.488 | -1.47 | 5.9% |
-| XAUUSD | M15 | 518 | 32.2% | 2.59 | **+0.138** | 1.55 | 4.7% |
-| XAUUSD | M30 | 530 | 34.0% | 2.07 | **+0.015** | 0.65 | 5.4% |
+`cost/stop` is round-trip friction as a share of the risk on each trade. It is
+the number that decides whether a strategy is viable, and it depends far more on
+the **size of the move being traded** than on the entry timeframe.
 
-`cost/stop` is round-trip friction as a share of the risk on each trade, and it
-explains the whole table. **M5 is the worst timeframe on every symbol** — on FX
-you pay 22–24% of your risk budget in spread on every trade. Gold survives only
-because its spread is 4% of its M15 range, not because the strategy works better
-there.
+| Symbol | stop from M5 | from H1 | from H4 |
+|---|---|---|---|
+| EURUSD | 4.8% | 1.4% | 0.6% |
+| XAUUSD | 1.4% | 0.3% | 0.1% |
+| US30 | 8.0% | 1.9% | 0.7% |
+| US500 | **31.2% dead** | 5.6% | 2.2% |
 
-## The survivor did not survive
-
-XAUUSD M15 showed Sharpe 1.56, 518 trades, and 5/5 positive walk-forward folds.
-The gauntlet blocked it on four gates:
-
-- **survives 2x costs: -11% of edge** — it is friction, not an edge
-- **deflated Sharpe 0.000** across 17 honest trials
-- **PBO 40%** — the selection procedure is fitting noise
-- **Monte Carlo 95th percentile drawdown 44.7%**
-
-Picking the best of nine timeframe/symbol combinations plus eight variants is
-exactly the search the deflated Sharpe exists to penalise.
-
-## Two bugs this found
-
-**MT5 history paging.** `copy_rates_range` returns "Invalid params" regardless of
-how the datetimes are built, and `copy_rates_from` rejects timezone-aware ones.
-The adapter now uses position-based paging only, with the 50k ceiling made
-explicit rather than silently truncating.
-
-**Swap was not modelled at all.** Every overnight position in every backtest had
-free financing. Now charged per rollover crossed, with the triple Wednesday
-charge. Impact: XAUUSD M15 expectancy 0.148 -> 0.138, M30 0.041 -> 0.015. FX is
-unaffected because those trades are intraday.
+M5 entry is viable here on EURUSD, gold and US30. It was not on the previous
+broker, where the same table read 22-24%. That was a spread problem, not a
+timeframe problem.

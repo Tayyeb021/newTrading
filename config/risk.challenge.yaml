@@ -1,0 +1,56 @@
+# Risk profile: prop firm evaluation.
+#
+# Sized from the Monte Carlo sweep in research/prop_challenge_sim.py. The headline
+# result: for a genuine edge, P(pass) PEAKS around 0.5% risk per trade and falls
+# from there. Since evaluations no longer carry time limits, time is free and
+# drawdown is not, so there is nothing to buy by sizing up.
+#
+# Every "hard" number below must be set to the FIRM's actual published limit, and
+# every "soft" number is where we stop. The gap is the buffer that survives one
+# bad fill. Verify all four against the rulebook before funding an attempt --
+# comparison sites contradict each other and the rulebook is the only authority.
+
+profile: challenge
+
+account:
+  # Nominal evaluation size. The engine reads live equity; this documents intent.
+  size: 100000
+  currency: USD
+
+sizing:
+  risk_per_trade: 0.005 # 0.5% -- the simulated optimum
+  max_risk_per_trade: 0.0075 # ceiling the engine will never exceed
+  atr_period: 14
+  atr_stop_multiple: 2.5
+
+limits:
+  # Firm publishes 5% daily; we stop at 3.5%.
+  daily_loss_soft: 0.035
+  daily_loss_hard: 0.05
+
+  # Firm publishes 10% max; we stop at 7%.
+  max_drawdown_soft: 0.07
+  max_drawdown_hard: 0.10
+
+  # Prefer static-drawdown firms. Under trailing rules the same edge passes far
+  # less often -- set this true only if the firm actually trails, and expect it
+  # to hurt.
+  drawdown_trailing: false
+
+  max_concurrent_positions: 3
+  max_bucket_risk: 0.01
+  consecutive_losses: 4
+  # A pause must expire, or the strategy can never record the win
+  # that resets its streak and is dead for the life of the process.
+  consecutive_loss_pause_hours: 24
+  min_margin_level: 3.0
+  max_spread_multiple: 2.0
+  max_feed_age_seconds: 10.0
+
+# Correlated instruments share one risk budget. US30 and US500 correlate around
+# 0.9 -- independent risk on each is one bet in a costume.
+buckets:
+  us_indices: [US30, US500, NAS100]
+  metals: [XAUUSD, XAGUSD]
+  usd_majors: [EURUSD, GBPUSD, AUDUSD, NZDUSD]
+  jpy_crosses: [USDJPY, EURJPY, GBPJPY]

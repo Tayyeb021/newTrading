@@ -1,0 +1,378 @@
+"""The live trading loop.
+
+Startup order is not arbitrary; each step depends on the one before:
+
+1. connect, read equity
+2. **restore the session book** — carrying today's daily loss forward if the
+   process is restarting mid-session (see `live.state`)
+3. **reconcile against the broker** — adopt or report orphan positions
+4. **repair missing stops** — an unstopped position makes every aggregate limit
+   wrong, so nothing may trade until it is fixed
+5. only then, start trading
+
+`order_send` blocks, so it runs on a worker thread behind a queue. The loop never
+waits on the broker: a slow fill on gold during a news spike must not stall the
+ingest of everything else. The MT5 adapter's docstring promised this wiring; here
+it is.
+
+Shutdown is graceful on SIGINT/SIGTERM: stop accepting signals, let the worker
+drain, save state, disconnect. Positions are *not* closed on shutdown — stopping
+the software is not the same as wanting to be flat, and silently liquidating on
+Ctrl+C would be a nasty surprise. Use the kill switch or `flatten_all.py` for that.
+"""
+
+from __future__ import annotations
+
+import logging
+import queue
+import signal
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from core.strategy import Strategy
+from core.types import OrderRequest, OrderResult, Position, Signal, SymbolSpec
+from execution.base import ExecutionAdapter
+from execution.oms import OrderManager, client_id
+from live.state import StateStore, restore_book
+from ops.journal import Journal
+from risk.engine import RiskEngine
+from risk.killswitch import KillFile
+from risk.limits import Severity
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class Job:
+    kind: str  # "submit" | "close_all" | "close_ticket"
+    request: OrderRequest | None = None
+    cid: str = ""
+    ticket: int | None = None
+
+
+@dataclass
+class ExecutionWorker:
+    """Runs blocking broker calls off the event loop."""
+
+    oms: OrderManager
+    journal: Journal
+    inbox: "queue.Queue[Job | None]" = field(default_factory=queue.Queue)
+    results: "queue.Queue[OrderResult]" = field(default_factory=queue.Queue)
+    _thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="execution", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 30.0) -> None:
+        self.inbox.put(None)
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def submit(self, request: OrderRequest, cid: str) -> None:
+        self.inbox.put(Job("submit", request, cid))
+
+    def close_all(self) -> None:
+        self.inbox.put(Job("close_all"))
+
+    def close_ticket(self, ticket: int) -> None:
+        """Close one position. A strategy exiting its own trade must not flatten
+        every other strategy's positions too."""
+        self.inbox.put(Job("close_ticket", ticket=ticket))
+
+    def drain(self) -> list[OrderResult]:
+        out: list[OrderResult] = []
+        while True:
+            try:
+                out.append(self.results.get_nowait())
+            except queue.Empty:
+                return out
+
+    def _run(self) -> None:
+        while True:
+            job = self.inbox.get()
+            if job is None:
+                return
+            try:
+                if job.kind == "submit" and job.request is not None:
+                    result = self.oms.submit(job.request, job.cid)
+                    self.journal.fill(result, job.cid)
+                    self.results.put(result)
+                elif job.kind == "close_all":
+                    for result in self.oms.close_all():
+                        self.journal.fill(result, "flatten")
+                        self.results.put(result)
+                elif job.kind == "close_ticket" and job.ticket is not None:
+                    result = self.oms.adapter.close(job.ticket)
+                    self.journal.fill(result, f"exit#{job.ticket}")
+                    self.results.put(result)
+            except Exception as exc:  # noqa: BLE001 - the worker must never die
+                log.exception("execution worker error: %s", exc)
+                self.journal.write("worker_error", error=str(exc), job=job.kind)
+
+
+class Runner:
+    def __init__(
+        self,
+        adapter: ExecutionAdapter,
+        risk: RiskEngine,
+        strategies: dict[str, Strategy],
+        specs: dict[str, SymbolSpec],
+        timeframe: str = "D1",
+        poll_seconds: float = 5.0,
+        state: StateStore | None = None,
+        journal: Journal | None = None,
+        kill: KillFile | None = None,
+    ) -> None:
+        self.adapter = adapter
+        self.risk = risk
+        self.strategies = strategies
+        self.specs = specs
+        self.timeframe = timeframe
+        self.poll_seconds = poll_seconds
+        self.state = state or StateStore()
+        self.journal = journal or Journal()
+        self.kill = kill or KillFile()
+
+        self.oms = OrderManager(adapter)
+        self.worker = ExecutionWorker(self.oms, self.journal)
+        self._stop = threading.Event()
+        self._last_bar: dict[str, datetime] = {}
+        self.halted = False
+
+    # ------------------------------------------------------------------ startup
+
+    def start(self) -> list[str]:
+        """Connect, restore, reconcile, repair. Returns the startup notes."""
+        notes: list[str] = []
+        self.adapter.connect()
+        account = self.adapter.account()
+        notes.append(f"connected: equity {account.equity:,.2f} {account.currency}")
+
+        book, state_notes = restore_book(self.state, account.equity)
+        self.risk.book = book
+        notes.extend(state_notes)
+
+        known = self.journal.known_tickets()
+        orphans = self.oms.orphans(known)
+        if orphans:
+            for pos in orphans:
+                notes.append(
+                    f"ORPHAN: {pos.symbol} {pos.side.name} {pos.volume:g} "
+                    f"ticket {pos.ticket} - opened by a process that did not journal it"
+                )
+                self.journal.write(
+                    "orphan_adopted", symbol=pos.symbol, ticket=pos.ticket,
+                    side=pos.side.name, volume=pos.volume, stop_loss=pos.stop_loss,
+                )
+        else:
+            notes.append("no orphan positions")
+
+        unstopped = [p for p in self.adapter.positions() if p.stop_loss is None]
+        if unstopped:
+            notes.append(f"{len(unstopped)} position(s) missing a stop - repairing before trading")
+            defaults = self._default_stop_distances()
+            for result in self.oms.ensure_stops(defaults):
+                notes.append(f"  stop repair: {result.status.value} {result.reason}")
+
+        if self.kill.engaged():
+            record = self.kill.read()
+            self.risk.book.kill(record.reason)
+            notes.append(str(record))
+
+        self.worker.start()
+        self.journal.write("startup", notes=notes, equity=account.equity)
+        return notes
+
+    def _default_stop_distances(self) -> dict[str, float]:
+        """Fallback stops for repair: 2x the last daily range. Crude on purpose.
+
+        This is emergency risk containment, not a strategy decision. A crude stop
+        that exists beats an elegant one that does not.
+        """
+        out: dict[str, float] = {}
+        for symbol in self.specs:
+            try:
+                bars = self.adapter.bars(symbol, "D1", count=2)
+                out[symbol] = 2.0 * (bars[-1].high - bars[-1].low)
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+
+    # --------------------------------------------------------------------- loop
+
+    def run(self, max_iterations: int | None = None) -> None:
+        self._install_signal_handlers()
+        iteration = 0
+        try:
+            while not self._stop.is_set():
+                if max_iterations is not None and iteration >= max_iterations:
+                    break
+                iteration += 1
+                try:
+                    self.tick()
+                except Exception as exc:  # noqa: BLE001 - a loop that dies stops managing risk
+                    log.exception("loop error: %s", exc)
+                    self.journal.write("loop_error", error=str(exc))
+                self._stop.wait(self.poll_seconds)
+        finally:
+            self.shutdown()
+
+    def tick(self) -> None:
+        """One iteration. Safe to call directly from a test."""
+        now = datetime.now(timezone.utc)
+
+        # 1. kill switch, before anything else
+        if self.kill.engaged() and not self.risk.book.killed:
+            record = self.kill.read()
+            self.risk.book.kill(record.reason)
+            self.journal.write("kill_engaged", reason=record.reason, by=record.by)
+            self.worker.close_all()
+
+        # 2. account state and the account-level limits
+        account = self.adapter.account()
+        self.risk.book.observe_equity(account.equity, today=now.date())
+        positions = self.adapter.positions()
+
+        state = self.risk.snapshot(
+            equity=account.equity, balance=account.balance,
+            margin_level=account.margin_level, positions=positions, now=now,
+            current_price=self._prices(), current_spread=self._spreads(),
+        )
+        breaches = self.risk.check_account(state)
+        for breach in breaches:
+            self.journal.breach(breach)
+
+        if any(b.severity is Severity.FLATTEN for b in breaches):
+            self.halted = True
+            self.worker.close_all()
+            self.kill.engage(f"auto: {breaches[0].message}", by="risk_engine")
+            self.risk.book.kill(breaches[0].message)
+            self._persist()
+            return
+
+        self.halted = any(b.severity in (Severity.HALT, Severity.FLATTEN) for b in breaches)
+
+        # 3. strategy evaluation, only on a newly closed bar
+        if not self.halted:
+            for symbol, strategy in self.strategies.items():
+                try:
+                    self._evaluate(symbol, strategy, state, now)
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("%s: %s", symbol, exc)
+                    self.journal.write("strategy_error", symbol=symbol, error=str(exc))
+
+        # 4. collect fills, record, persist
+        for result in self.worker.drain():
+            if result.ok:
+                self.journal.write("fill_confirmed", ticket=result.ticket,
+                                   symbol=result.request.symbol)
+
+        self.journal.heartbeat(
+            equity=account.equity, positions=len(positions),
+            halted=self.halted, daily=state.daily_pnl_fraction,
+            drawdown=state.drawdown_fraction(trailing=False),
+        )
+        self._persist()
+
+    def _evaluate(self, symbol: str, strategy: Strategy, state, now: datetime) -> None:
+        import pandas as pd
+
+        bars = self.adapter.bars(symbol, self.timeframe, count=strategy.warmup + 60)
+        if len(bars) < strategy.warmup + 2:
+            return
+
+        # Only act on a CLOSED bar. The most recent bar is still forming, so it
+        # is dropped - acting on a partial bar is live-trading's look-ahead bug.
+        closed = bars[:-1]
+        last_ts = closed[-1].ts
+        if self._last_bar.get(symbol) == last_ts:
+            return
+        self._last_bar[symbol] = last_ts
+
+        df = pd.DataFrame([{
+            "ts": b.ts, "open": b.open, "high": b.high,
+            "low": b.low, "close": b.close, "volume": b.volume,
+        } for b in closed])
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        df = strategy.prepare(df)
+
+        held = next((p for p in state.positions if p.symbol == symbol), None)
+        intent = strategy.evaluate(df, len(df) - 1, held)
+
+        if intent.flat:
+            if held is not None:
+                self.journal.write("exit_signal", symbol=symbol, ticket=held.ticket)
+                self.worker.close_ticket(held.ticket)
+            return
+        if held is not None and held.side is intent.side:
+            return
+
+        signal = Signal(
+            symbol=symbol, side=intent.side, stop_distance=intent.stop_distance,
+            confidence=intent.confidence, strategy=strategy.name, ts=now,
+        )
+        decision = self.risk.evaluate(signal, state)
+        self.journal.decision(signal, decision, {
+            "equity": state.equity,
+            "daily": state.daily_pnl_fraction,
+            "drawdown": state.drawdown_fraction(trailing=False),
+            "positions": len(state.positions),
+        })
+        if not decision.approved:
+            return
+
+        # Re-check the kill switch immediately before submitting. The gap between
+        # deciding and trading is exactly where a stop instruction arrives.
+        if self.kill.engaged():
+            self.journal.write("submit_aborted", symbol=symbol, reason="kill switch")
+            return
+
+        cid = client_id(strategy.name, symbol, intent.side.name, last_ts)
+        self.worker.submit(decision.order, cid)
+
+    # ------------------------------------------------------------------ helpers
+
+    def _prices(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for symbol in self.specs:
+            try:
+                out[symbol] = self.adapter.tick(symbol).mid
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+
+    def _spreads(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for symbol in self.specs:
+            try:
+                out[symbol] = self.adapter.tick(symbol).spread
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+
+    def _persist(self) -> None:
+        self.state.save(self.risk.book)
+
+    def _install_signal_handlers(self) -> None:
+        def handler(signum, _frame):
+            log.info("signal %s received; shutting down", signum)
+            self._stop.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass  # not on the main thread, e.g. under a test runner
+
+    def shutdown(self) -> None:
+        """Stop cleanly. Deliberately does NOT close positions."""
+        self.worker.stop()
+        self._persist()
+        self.journal.write("shutdown", halted=self.halted)
+        try:
+            self.adapter.disconnect()
+        except Exception:  # noqa: BLE001
+            pass

@@ -1,0 +1,41 @@
+# Risk profile: funded account / own capital.
+#
+# Different objective from `challenge`. There, the job is to maximise P(reaching a
+# target before a breach). Here it is long-run risk-adjusted return, so drawdown
+# limits are set by what you can actually sit through rather than by a rulebook,
+# and holding periods can be longer.
+#
+# Still conservative. A funded account that breaches is gone, and the evaluation
+# fee is sunk.
+
+profile: funded
+
+account:
+  size: 100000
+  currency: USD
+
+sizing:
+  risk_per_trade: 0.0075
+  max_risk_per_trade: 0.01
+  atr_period: 14
+  atr_stop_multiple: 2.5
+
+limits:
+  daily_loss_soft: 0.03
+  daily_loss_hard: 0.05
+  max_drawdown_soft: 0.08
+  max_drawdown_hard: 0.12
+  drawdown_trailing: false
+  max_concurrent_positions: 4
+  max_bucket_risk: 0.015
+  consecutive_losses: 5
+  consecutive_loss_pause_hours: 24
+  min_margin_level: 3.0
+  max_spread_multiple: 2.5
+  max_feed_age_seconds: 10.0
+
+buckets:
+  us_indices: [US30, US500, NAS100]
+  metals: [XAUUSD, XAGUSD]
+  usd_majors: [EURUSD, GBPUSD, AUDUSD, NZDUSD]
+  jpy_crosses: [USDJPY, EURJPY, GBPJPY]

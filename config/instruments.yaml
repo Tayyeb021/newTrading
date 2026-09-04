@@ -1,0 +1,29 @@
+# Canonical names, and what THIS broker calls them.
+#
+# Re-baselined 2026-09-04 after the terminal switched accounts:
+#   was  Exness cent account  - 43 symbols, "c" suffix, zero balance, no indices
+#   now  IC Markets demo      - 7,391 symbols, plain names, USD 103k, indices present
+#
+# The Exness bar store is archived at data/bars_exness_archived. Do not mix them:
+# the cent account had 1/100th contract sizes and different spreads, so specs and
+# costs from one are meaningless for the other.
+
+symbols:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - XAUUSD
+  - US30
+  - US500
+
+# IC Markets uses plain symbol names - no aliases needed.
+aliases: {}
+
+execution_timeframes: [M5, M15, M30]
+bias_timeframes: [H1, H4, D1]
+
+active:
+  - EURUSD
+  - XAUUSD
+  - US30
+  - US500

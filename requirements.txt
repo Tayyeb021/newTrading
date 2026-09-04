@@ -1,0 +1,19 @@
+# Core
+numpy>=2.0
+pandas>=2.2
+pyarrow>=16.0
+PyYAML>=6.0
+
+# Machine learning layer (phase 4)
+scikit-learn>=1.5
+scipy>=1.13
+
+# Broker connectivity - Windows only, needs a running MT5 terminal.
+# Everything except live trading and downloads works without it.
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
+
+# Timezone database, required by zoneinfo on Windows.
+tzdata>=2024.1
+
+# Tests
+pytest>=8.0

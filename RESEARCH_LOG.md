@@ -5,7 +5,7 @@ re-testing a dead idea in six months having forgotten, and it is the **honest
 trial count** that the deflated Sharpe ratio needs. Without that count, no result
 here is interpretable.
 
-**Running trial count: 26** (18 backtest configurations + 8 gauntlet variants,
+**Running trial count: 30** (18 backtest configurations + 8 gauntlet variants,
 plus the diagnostics below, which test the same hypotheses rather than new ones).
 
 ---
@@ -64,3 +64,48 @@ without a materially different entry definition or a different cost structure.**
 - Stop distance belongs to the *structure* timeframe, never the entry timeframe.
 - The momentum-confirmation trigger is a cost, not a filter.
 - Test the differential, not the level, when a sample sits inside one regime.
+
+---
+
+## 002 — S1 time-series momentum, daily bars — **DEAD on all four**
+
+*Tested 2026-09-05. IC Markets, real spreads, real swap (mode-correct), 2010+.*
+
+First run of the trend baseline on real data. 60-day lookback, price vs EMA(60),
+2.5x ATR(14) stop, symmetric long/short. Research mode: an account-level halt
+re-bases the drawdown reference and counts a failed evaluation.
+
+| Symbol | Trades | Win | Payoff | Expectancy | Sharpe | Cost drag | 2x costs | Evals failed |
+|---|---|---|---|---|---|---|---|---|
+| EURUSD | 286 | 23.8% | 3.03 | -0.014R | -0.04 | 14% | dead | 0 |
+| XAUUSD | 247 | 24.3% | 3.66 | +0.047R | 0.16 | 31% | **-194%** | 0 |
+| US30 | 195 | 15.9% | 0.96 | -0.384R | -0.81 | 168% | dead | **4** |
+| US500 | 198 | 12.6% | 1.03 | -0.452R | -0.94 | 192% | dead | **5** |
+
+Equal-weight portfolio of all four: Sharpe **-0.71**.
+
+### Reading it
+- EURUSD is a coin flip minus costs. The classic no-edge signature.
+- Gold is weakly positive and dies when costs double. Not an edge; a rounding
+  error in the cost model's favour.
+- The indices are a bloodbath: 2010-2026 is a grinding bull market with V-shaped
+  corrections, the worst possible regime for a symmetric trend rule. Every short
+  gets killed at the V-bottom. Under the challenge profile it would have failed
+  the evaluation four and five times.
+- The published trend effect (Moskowitz et al.) is a *portfolio* result across
+  58 instruments with sophisticated vol scaling, and is notably weaker after
+  2010. A single-instrument daily rule on the most liquid markets on earth is
+  not the same experiment.
+
+### Two bugs found by this run, both fixed
+1. An account-level HALT in a multi-year backtest had no human to restart it, so
+   US30 showed 17 trades in 14 years with 2,525 signals rejected. Backtester now
+   records `halted_at`, and `reset_on_halt=True` re-bases and counts failures.
+2. `swap_mode` is not uniform: FX and gold in POINTS, US30 in margin currency,
+   and index CFDs triple-charge on **Friday**, not Wednesday. Conversion now
+   honours the broker's mode per symbol.
+
+### Verdict
+Two strategy families, 30 configurations, zero survivors. Simple technical rules
+on these four instruments at retail costs have now been tested at M5, M15, M30
+and D1 with two different signal families. Stop testing indicator rules here.

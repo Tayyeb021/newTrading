@@ -76,6 +76,13 @@ class BacktestResult:
     symbol: str = ""
     strategy: str = ""
     cost_model_calibrated: bool = False
+    #: When an account-level HALT first engaged. Live, a human reviews and
+    #: restarts; in a backtest nothing does, so one bad year silently blanks
+    #: the next thirteen. Found when US30 showed 17 trades in 14 years with
+    #: 2,525 signals rejected by max_drawdown.
+    halted_at: datetime | None = None
+    #: With `reset_on_halt`, how many times the evaluation would have failed.
+    evaluations_failed: int = 0
 
     @property
     def final_equity(self) -> float:
@@ -91,6 +98,7 @@ class Backtester:
         costs: CostModel,
         starting_equity: float = 100_000.0,
         session_open_hour_utc: int | None = None,
+        reset_on_halt: bool = False,
     ) -> None:
         self.strategy = strategy
         self.spec = spec
@@ -98,6 +106,12 @@ class Backtester:
         self.costs = costs
         self.starting_equity = starting_equity
         self.session_open_hour = session_open_hour_utc
+        #: Research mode. On an account-level HALT, count a failed evaluation
+        #: and re-base the drawdown reference to current equity - simulating
+        #: "review, restart a fresh evaluation" - so the strategy's behaviour
+        #: over the whole history stays observable. Off by default: the
+        #: challenge-mode answer ("you would have failed in 2011") is also real.
+        self.reset_on_halt = reset_on_halt
 
     def run(self, df: pd.DataFrame) -> BacktestResult:
         symbol = self.spec.symbol
@@ -216,6 +230,14 @@ class Backtester:
         if not decision.approved:
             key = decision.breaches[0].limit if decision.breaches else decision.note.split(":")[0]
             result.rejections[key] = result.rejections.get(key, 0) + 1
+            if decision.must_halt:
+                if result.halted_at is None:
+                    result.halted_at = ts
+                if self.reset_on_halt:
+                    result.evaluations_failed += 1
+                    self.risk.book.starting_equity = equity
+                    self.risk.book.high_water_equity = equity
+                    self.risk.book.day_start_equity = equity
             return None, None, 0.0, 0.0, equity
 
         fill = self._fill(open_price, intent.side, ts)
@@ -284,7 +306,7 @@ class Backtester:
 
         swap = self.costs.swap_cash(
             self.spec.symbol, position.volume, entry_ts, ts,
-            is_long=position.side is Side.BUY,
+            is_long=position.side is Side.BUY, spec=self.spec, price=position.entry_price,
         )
         equity -= swap
         exit_friction += swap

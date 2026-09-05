@@ -194,6 +194,12 @@ def report(result: BacktestResult, m: Metrics | None = None) -> str:
     if not result.cost_model_calibrated:
         L.append("  ! cost model is UNCALIBRATED - placeholder values, not your broker's")
 
+    if result.halted_at is not None:
+        L.append("")
+        L.append(f"  ! HALTED by an account-level limit on {result.halted_at:%Y-%m-%d}"
+                 + (f" - evaluation failed {result.evaluations_failed}x, re-based each time"
+                    if result.evaluations_failed else
+                    " and never restarted: everything after is untested, not bad"))
     if result.rejections:
         L.append("")
         L.append("  RISK ENGINE REJECTIONS")

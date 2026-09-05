@@ -59,6 +59,11 @@ TRADE_RETCODE_DONE = 10009
 MAX_BARS_PER_REQUEST = 50_000
 
 
+def _mt5_weekday(mt5_day: int) -> int:
+    """MT5 counts Sunday=0 .. Saturday=6; Python counts Monday=0 .. Sunday=6."""
+    return (mt5_day - 1) % 7
+
+
 def _import_mt5() -> Any:
     try:
         import MetaTrader5 as mt5  # noqa: N813
@@ -200,6 +205,8 @@ class MT5Adapter:
             swap_long=float(getattr(info, "swap_long", 0.0)),
             swap_short=float(getattr(info, "swap_short", 0.0)),
             currency_profit=str(getattr(info, "currency_profit", "USD")),
+            swap_mode=int(getattr(info, "swap_mode", 4)),
+            swap_triple_weekday=_mt5_weekday(int(getattr(info, "swap_rollover3days", 3))),
         )
         self._spec_cache[symbol] = spec
         return spec

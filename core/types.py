@@ -91,6 +91,29 @@ class SymbolSpec:
     swap_long: float = 0.0
     swap_short: float = 0.0
     currency_profit: str = "USD"
+    #: MT5 SYMBOL_SWAP_MODE. Brokers mix these even within one account: on IC
+    #: Markets FX and gold report in POINTS, US30 in margin currency, US500 in
+    #: symbol currency. Treating every rate as "account currency per lot" was
+    #: wrong for two of four symbols - it just happened to be numerically close.
+    swap_mode: int = 4
+    #: Weekday the triple swap is charged (Mon=0). FX rolls 3 days on Wednesday;
+    #: index CFDs on this broker do it on Friday.
+    swap_triple_weekday: int = 2
+
+    def swap_cash_per_lot_night(self, is_long: bool, price: float) -> float:
+        """Overnight financing for ONE lot, in account currency, signed as the
+        broker signs it (negative = you pay). Converts from whatever unit the
+        broker uses. Percent modes need the current price."""
+        rate = self.swap_long if is_long else self.swap_short
+        if rate == 0.0 or self.swap_mode == 0:
+            return 0.0
+        if self.swap_mode == 1:  # points of price
+            return rate * self.point * self.value_per_price_unit
+        if self.swap_mode in (2, 3, 4):  # symbol / margin / deposit currency
+            return rate  # USD-quoted account; a non-USD base would need FX conversion
+        if self.swap_mode in (5, 6, 7, 8):  # annual percent of position value
+            return rate / 100.0 * price * self.contract_size / 360.0
+        return rate
 
     def __post_init__(self) -> None:
         for name in ("tick_size", "tick_value", "volume_min", "volume_step"):

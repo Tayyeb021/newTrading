@@ -106,17 +106,28 @@ class CostModel:
         entry_ts,
         exit_ts,
         is_long: bool,
+        spec: SymbolSpec | None = None,
+        price: float = 0.0,
     ) -> float:
         """Financing charged between two timestamps. Returns a positive COST.
 
         Counts each 21:00-UTC rollover crossed, with a triple charge on the
-        broker's 3-day weekday. Returns 0.0 for an intraday trade, which is
-        exactly why flattening before rollover is worth enforcing.
+        broker's 3-day weekday (Wednesday for FX, Friday for index CFDs here).
+        Returns 0.0 for an intraday trade, which is exactly why flattening
+        before rollover is worth enforcing.
+
+        When a spec is supplied the broker's swap_mode is honoured - points,
+        currency, or annual percent - instead of assuming currency per lot.
         """
         import pandas as pd
 
         c = self.for_symbol(symbol)
-        rate = c.swap_long if is_long else c.swap_short
+        if spec is not None:
+            rate = spec.swap_cash_per_lot_night(is_long, price)
+            triple_day = spec.swap_triple_weekday
+        else:
+            rate = c.swap_long if is_long else c.swap_short
+            triple_day = c.triple_swap_weekday
         if rate == 0.0:
             return 0.0
 
@@ -128,7 +139,7 @@ class CostModel:
 
         nights = 0
         while rollover <= end:
-            nights += 3 if rollover.weekday() == c.triple_swap_weekday else 1
+            nights += 3 if rollover.weekday() == triple_day else 1
             rollover += pd.Timedelta(days=1)
 
         return -rate * volume * nights * self.stress

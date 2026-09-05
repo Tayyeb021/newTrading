@@ -5,7 +5,7 @@ re-testing a dead idea in six months having forgotten, and it is the **honest
 trial count** that the deflated Sharpe ratio needs. Without that count, no result
 here is interpretable.
 
-**Running trial count: 134** (18 backtest configurations + 8 gauntlet variants,
+**Running trial count: 146** (18 backtest configurations + 8 gauntlet variants,
 plus the diagnostics below, which test the same hypotheses rather than new ones).
 
 ---
@@ -181,3 +181,53 @@ intended behaviour.
 
 **Not a trial** for DSR purposes: no new hypothesis was tested, only the
 machinery. Trial count stays at 134.
+
+---
+
+## 005 — Cross-sectional FX momentum and carry, G8 universe — **DEAD**
+
+*2026-09-05. `research/cross_sectional.py`. 28 G8 crosses downloaded from IC
+Markets; 21 with history back to 2010 (the seven AUD/CAD crosses start after
+2014 on this broker). Monthly rebalance, long top quintile / short bottom,
+measured spreads on turnover. Run at two windows. 12 trials counted.*
+
+This was the last family with real published evidence that had not been
+tested, and the first test in the project built the way that evidence was
+generated - as a ranked portfolio rather than single-instrument timing.
+
+| construction | since 2010 | since 2014 |
+|---|---|---|
+| xs_momentum_1m | -0.3%/yr, t -0.10 | -1.9%, t -0.60 |
+| xs_momentum_3m | -3.4%, t -1.05 | -3.3%, t -0.98 |
+| xs_momentum_6m | -4.4%, t -1.45 | **-5.3%, t -1.78** |
+| xs_momentum_12m | -2.9%, t -0.94 | -2.5%, t -0.76 |
+| tsmom_12m_volscaled | -0.4%, t -0.35 | -0.2%, t -0.18 |
+| carry_2023+ (approx) | -2.8%, t -0.77 | same |
+
+Bar: t > 2.64. Nothing approaches it in either direction. The closest thing to
+a signal is *negative* six-month momentum - developed-market FX has been mildly
+mean-reverting since 2014 - and it is not significant either.
+
+### Reading it
+This is the literature's answer, not a surprise. Menkhoff et al. found FX
+momentum concentrated in emerging and minor currencies with wide spreads, and
+weak in G10. Moskowitz's TSMOM result is a 58-instrument, multi-asset-class
+portfolio; its FX sleeve alone was never the strong part. A G8-only universe
+is where the effect is thinnest, and this broker's tradeable universe is G8.
+
+Carry is the one construction not properly tested: only current swap rates
+exist, so the book is ranked on 2026 rates and held over 2023-2026. That is an
+approximation and is labelled one. A real carry test needs fifteen years of
+rate history the broker does not provide.
+
+### Verdict
+Four families, 146 trials, zero survivors. Every family with published
+evidence has now been tested in the form the evidence was published in, on
+this broker's tradeable universe, and none of it is there at retail costs.
+
+### Data quality, for the record
+- Three USD majors failed on first download with a transient terminal error
+  and succeeded on retry. A universe missing GBPUSD, USDCHF and USDJPY is not
+  a G8 universe; check the pair list before believing a cross-section.
+- EURNZD carried exactly one corrupt bar (1999-08-18, low = 0.0). The store's
+  validator refused the whole write rather than absorb it. Dropped and rewritten.

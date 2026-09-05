@@ -156,10 +156,14 @@ def carry_portfolio(me: pd.DataFrame, swaps: dict[str, float], top_n: int, start
 def main() -> int:
     store = BarStore("data/bars")
     universe = sys.argv[1] if len(sys.argv) > 1 else "config/fx_universe.json"
+    since = sys.argv[2] if len(sys.argv) > 2 else "2010-01-01"
     specs = json.loads(Path(universe).read_text(encoding="utf-8"))
-    print(f"universe file: {universe}")
+    print(f"universe file: {universe}, since {since}")
     pairs = sorted(specs)
-    panel = load_panel(store, pairs)
+    panel = load_panel(store, pairs, start=since)
+    dropped = sorted(set(pairs) - set(panel.columns))
+    if dropped:
+        print(f"dropped for short history: {dropped}")
     me = month_ends(panel)
     print(f"universe: {panel.shape[1]} pairs, {panel.index[0]:%Y-%m} -> {panel.index[-1]:%Y-%m}, "
           f"{len(me)} month-ends\n")

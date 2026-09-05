@@ -26,13 +26,13 @@ model, and the demo forward test.
 ## Layout
 
 ```
-core/        domain types, config loading
+core/        domain types, config loading, Sleeve
 execution/   ExecutionAdapter protocol, MT5 + paper adapters
 risk/        sizing, limits register, the risk gate
 data/        Parquet bar store, validation, gap analysis, downloader
 features/    causal indicators - ATR, EMA, momentum, Donchian
 strategies/  S1 trend baseline, buy-and-hold control
-backtest/    engine, cost model, metrics
+backtest/    engine, cost model, metrics, PORTFOLIO (many sleeves, one book)
 live/        runner, execution worker, durable session state
 ops/         append-only decision journal
 ml/          labelling, purged CV, regime + meta models, DSR/PBO/Monte Carlo
@@ -337,3 +337,40 @@ The two that matter most:
 Both are calibrated against known answers in `tests/test_ml.py`: PBO returns ≈0.5
 on pure noise and <0.2 when one configuration has a real edge; PSR returns exactly
 0.5 when the observed Sharpe equals the benchmark.
+
+## The portfolio layer
+
+```bash
+python scripts/backtest_portfolio.py --symbols EURUSD XAUUSD US500 --max-positions 6
+```
+
+A **sleeve** is one strategy, the symbols it trades, and its share of the risk
+budget (`core/sleeve.py`). The book is a list of sleeves. Two sleeves may hold
+the same symbol, in opposite directions if they disagree; the risk engine nets
+the exposure and the correlated-bucket limit caps the total.
+
+`PortfolioBacktester` runs every (sleeve, symbol) leg in lockstep on one clock,
+sharing **one equity curve and one risk engine**. When sleeve A asks to open,
+the risk state it is judged against already contains sleeve B's positions. A
+portfolio of one sleeve produces trades identical to the single-symbol
+backtester — that equivalence is asserted in `tests/test_portfolio.py`.
+
+**The allocator** is a limit like any other: `SleeveBudget` gives each sleeve a
+share of `max_open_risk` (2% by default), measured from stops, and caps the
+book. It sits in the register beside the others and is journaled like them.
+
+**Attribution and correlation** come out of the same run: per-sleeve P&L, the
+weekly return correlation between sleeves, and the *diversification ratio* —
+the Sharpe multiple the book earns over its average sleeve, with correlation
+measured rather than assumed. Two truly independent sleeves give 1.41×; two
+momentum variants with different lookbacks gave **1.16× at ρ = 0.47**. That is
+the number the whole "run many strategies" argument rests on, and it is now
+measured, not hoped for.
+
+Sleeve names are at most 12 characters because they are the order-comment
+prefix that identifies a live position's sleeve after a restart.
+
+One interaction to know: the profile's `max_concurrent_positions` was written
+for a single strategy. A book of S sleeves over K symbols can want S×K
+positions, and the default cap of 3 starved the allocator before it did
+anything — 4,603 rejections in the first run. Size it for the book.

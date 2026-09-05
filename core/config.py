@@ -62,6 +62,10 @@ class RiskProfile:
     atr_period: int
     atr_stop_multiple: float
     buckets: dict[str, list[str]]
+    #: Total open risk the whole book may carry, across every sleeve. The
+    #: allocator splits this between sleeves by weight. Defaulted, so it
+    #: must sit after every required field.
+    max_open_risk: float = 0.02
 
     def __post_init__(self) -> None:
         if self.risk_per_trade > self.max_risk_per_trade:
@@ -81,6 +85,11 @@ class RiskProfile:
                     f"{self.name}: require 0 < {label}_soft ({soft}) < "
                     f"{label}_hard ({hard}) < 1"
                 )
+        if self.max_open_risk < self.max_risk_per_trade:
+            raise ConfigError(
+                f"{self.name}: max_open_risk {self.max_open_risk:.2%} is below "
+                f"max_risk_per_trade {self.max_risk_per_trade:.2%} - no trade could ever open"
+            )
         if self.daily_loss_soft <= self.max_risk_per_trade:
             raise ConfigError(
                 f"{self.name}: daily_loss_soft {self.daily_loss_soft:.2%} is not larger "
@@ -109,6 +118,7 @@ class RiskProfile:
             max_bucket_risk=float(limits.get("max_bucket_risk", 0.01)),
             consecutive_losses=int(limits.get("consecutive_losses", 4)),
             consecutive_loss_pause_hours=float(limits.get("consecutive_loss_pause_hours", 24.0)),
+            max_open_risk=float(limits.get("max_open_risk", 0.02)),
             min_margin_level=float(limits.get("min_margin_level", 3.0)),
             max_spread_multiple=float(limits.get("max_spread_multiple", 2.0)),
             max_feed_age_seconds=float(limits.get("max_feed_age_seconds", 10.0)),

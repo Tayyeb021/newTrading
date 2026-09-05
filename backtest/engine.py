@@ -52,6 +52,8 @@ class Trade:
     mae: float  # worst unrealised excursion, in R
     mfe: float  # best unrealised excursion, in R
     risk_cash: float
+    #: Which sleeve opened it. Empty for the single-symbol backtester.
+    sleeve: str = ""
 
     @property
     def net_pnl(self) -> float:

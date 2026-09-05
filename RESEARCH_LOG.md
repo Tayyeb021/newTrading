@@ -154,3 +154,30 @@ literature's answer as well. The published momentum and carry results are
 **cross-sectional portfolios** -- rank many instruments, long the top, short the
 bottom -- not single-instrument timing. This account offers 7,391 symbols and
 four have been used. That is the one structural avenue left untested.
+
+---
+
+## 004 — Portfolio layer built; two-momentum-sleeve book — **works, and both sleeves dead**
+
+*2026-09-05. `core/sleeve.py`, `backtest/portfolio.py`, `SleeveBudget` limit,
+sleeve support in the runner. 168 tests.*
+
+The demo book was deliberately a trap: `trend60` and `trend250` on EURUSD,
+XAUUSD and US500 since 2015. Two lookbacks look like two strategies.
+
+| sleeve | trades | net | expectancy | win |
+|---|---|---|---|---|
+| trend60 | 313 | -20,324 | -0.155R | 22% |
+| trend250 | 170 | -11,356 | -0.122R | 24% |
+
+Weekly sleeve correlation **0.47**; diversification ratio **1.16x** against a
+theoretical 1.41x for two independent sleeves. Read: mostly one bet. Both
+sleeves individually dead, consistent with entry 002.
+
+Found by running it: the profile's concurrent-position cap of 3 starved a
+2-sleeve x 3-symbol book (4,603 rejections). With the cap at 6, the allocator
+became the binding constraint (2,763 `sleeve_budget` rejections) - which is the
+intended behaviour.
+
+**Not a trial** for DSR purposes: no new hypothesis was tested, only the
+machinery. Trial count stays at 134.

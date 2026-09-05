@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from core.sleeve import Sleeve, sleeve_of
 from core.strategy import Strategy
 from core.types import OrderRequest, OrderResult, Position, Signal, SymbolSpec
 from execution.base import ExecutionAdapter
@@ -118,9 +119,10 @@ class Runner:
         self,
         adapter: ExecutionAdapter,
         risk: RiskEngine,
-        strategies: dict[str, Strategy],
-        specs: dict[str, SymbolSpec],
+        strategies: dict[str, Strategy] | None = None,
+        specs: dict[str, SymbolSpec] | None = None,
         timeframe: str = "D1",
+        sleeves: list[Sleeve] | None = None,
         poll_seconds: float = 5.0,
         state: StateStore | None = None,
         journal: Journal | None = None,
@@ -128,9 +130,20 @@ class Runner:
     ) -> None:
         self.adapter = adapter
         self.risk = risk
-        self.strategies = strategies
-        self.specs = specs
+        self.specs = specs or {}
         self.timeframe = timeframe
+        # Legs: one (sleeve, symbol, strategy) each. A legacy symbol->strategy
+        # dict becomes a single sleeve named "default".
+        self.legs: list[tuple[str, str, Strategy, str]] = []
+        if sleeves:
+            for sl in sleeves:
+                for sym in sl.symbols:
+                    self.legs.append((sl.name, sym, sl.build(sym), sl.timeframe))
+        elif strategies:
+            for sym, strat in strategies.items():
+                strat.name = "default"
+                self.legs.append(("default", sym, strat, timeframe))
+        self.strategies = {sym: strat for _, sym, strat, _ in self.legs}
         self.poll_seconds = poll_seconds
         self.state = state or StateStore()
         self.journal = journal or Journal()
@@ -139,7 +152,7 @@ class Runner:
         self.oms = OrderManager(adapter)
         self.worker = ExecutionWorker(self.oms, self.journal)
         self._stop = threading.Event()
-        self._last_bar: dict[str, datetime] = {}
+        self._last_bar: dict[tuple[str, str], datetime] = {}
         self.halted = False
 
     # ------------------------------------------------------------------ startup
@@ -268,12 +281,12 @@ class Runner:
 
         # 3. strategy evaluation, only on a newly closed bar
         if not self.halted:
-            for symbol, strategy in self.strategies.items():
+            for sleeve_name, symbol, strategy, tf in self.legs:
                 try:
-                    self._evaluate(symbol, strategy, state, now)
+                    self._evaluate(sleeve_name, symbol, strategy, tf, state, now)
                 except Exception as exc:  # noqa: BLE001
-                    log.exception("%s: %s", symbol, exc)
-                    self.journal.write("strategy_error", symbol=symbol, error=str(exc))
+                    log.exception("%s/%s: %s", sleeve_name, symbol, exc)
+                    self.journal.write("strategy_error", sleeve=sleeve_name, symbol=symbol, error=str(exc))
 
         # 4. collect fills, record, persist
         for result in self.worker.drain():
@@ -289,10 +302,11 @@ class Runner:
         )
         self._persist()
 
-    def _evaluate(self, symbol: str, strategy: Strategy, state, now: datetime) -> None:
+    def _evaluate(self, sleeve_name: str, symbol: str, strategy: Strategy, timeframe: str,
+                  state, now: datetime) -> None:
         import pandas as pd
 
-        bars = self.adapter.bars(symbol, self.timeframe, count=strategy.warmup + 60)
+        bars = self.adapter.bars(symbol, timeframe, count=strategy.warmup + 60)
         if len(bars) < strategy.warmup + 2:
             return
 
@@ -300,9 +314,9 @@ class Runner:
         # is dropped - acting on a partial bar is live-trading's look-ahead bug.
         closed = bars[:-1]
         last_ts = closed[-1].ts
-        if self._last_bar.get(symbol) == last_ts:
+        if self._last_bar.get((sleeve_name, symbol)) == last_ts:
             return
-        self._last_bar[symbol] = last_ts
+        self._last_bar[(sleeve_name, symbol)] = last_ts
 
         df = pd.DataFrame([{
             "ts": b.ts, "open": b.open, "high": b.high,
@@ -311,7 +325,10 @@ class Runner:
         df["ts"] = pd.to_datetime(df["ts"], utc=True)
         df = strategy.prepare(df)
 
-        held = next((p for p in state.positions if p.symbol == symbol), None)
+        # This sleeve's position on this symbol - another sleeve may hold the
+        # same symbol, possibly the other way, and that is not ours to touch.
+        held = next((p for p in state.positions
+                     if p.symbol == symbol and sleeve_of(p) == sleeve_name), None)
         intent = strategy.evaluate(df, len(df) - 1, held)
 
         if intent.flat:

@@ -187,6 +187,7 @@ class RiskEngine:
         *,
         regime_scalar: float = 1.0,
         max_volume: float | None = None,
+        risk_fraction: float | None = None,
     ) -> RiskDecision:
         spec = self.specs.get(signal.symbol)
         if spec is None:
@@ -201,7 +202,7 @@ class RiskEngine:
         size = size_position(
             spec,
             equity=state.equity,
-            risk_fraction=self.risk_per_trade,
+            risk_fraction=risk_fraction if risk_fraction is not None else self.risk_per_trade,
             stop_distance=signal.stop_distance,
             regime_scalar=regime_scalar,
             confidence=signal.confidence,

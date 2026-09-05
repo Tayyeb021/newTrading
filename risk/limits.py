@@ -372,6 +372,54 @@ class ConsecutiveLosses(Limit):
         )
 
 
+class SleeveBudget(Limit):
+    """Each sleeve gets a share of the book's open-risk budget; the book has a cap.
+
+    Six sleeves each risking 0.5% per trade are not six independent bets when
+    they share one drawdown limit. This is the allocator: sleeve A may hold at
+    most its share of the portfolio's open risk, and the portfolio as a whole may
+    not exceed the cap regardless of how it is split. Open risk is measured from
+    stops, which is why every position must carry one.
+
+    A position is attributed to a sleeve by its order-comment prefix, which is
+    the same mechanism that identifies positions after a crash.
+    """
+
+    name = "sleeve_budget"
+    severity = Severity.REJECT
+
+    def __init__(self, caps: dict[str, float], portfolio_cap: float) -> None:
+        if any(c > portfolio_cap + 1e-12 for c in caps.values()):
+            raise ValueError("a sleeve cap cannot exceed the portfolio cap")
+        self.caps = dict(caps)
+        self.portfolio_cap = portfolio_cap
+
+    def check(self, state: RiskState, trade: ProposedTrade | None) -> Breach | None:
+        if trade is None:
+            return None
+        from core.sleeve import sleeve_of
+
+        open_by: dict[str, float] = {}
+        for pos in state.positions:
+            open_by[sleeve_of(pos)] = open_by.get(sleeve_of(pos), 0.0) + _position_risk_fraction(pos, state)
+        total = sum(open_by.values())
+        mine = trade.strategy
+        cap = self.caps.get(mine)
+
+        if cap is not None and open_by.get(mine, 0.0) + trade.risk_fraction > cap + 1e-9:
+            return self._breach(
+                f"sleeve {mine!r} would hold {open_by.get(mine, 0.0) + trade.risk_fraction:.3%} "
+                f"open risk, budget {cap:.3%}",
+                open_by.get(mine, 0.0) + trade.risk_fraction, cap,
+            )
+        if total + trade.risk_fraction > self.portfolio_cap + 1e-9:
+            return self._breach(
+                f"book would hold {total + trade.risk_fraction:.3%} open risk, cap {self.portfolio_cap:.3%}",
+                total + trade.risk_fraction, self.portfolio_cap,
+            )
+        return None
+
+
 class UnstoppedPosition(Limit):
     """No position may exist without a stop.
 

@@ -7,6 +7,7 @@ killed or halted system stops before anything else is computed.
 from __future__ import annotations
 
 from core.config import RiskProfile
+from core.sleeve import Sleeve, normalise_weights
 from core.types import SymbolSpec
 from risk.engine import RiskEngine, SessionBook
 from risk.limits import (
@@ -20,12 +21,20 @@ from risk.limits import (
     MaxConcurrentPositions,
     MaxDrawdown,
     RiskPerTrade,
+    SleeveBudget,
     SpreadGuard,
     UnstoppedPosition,
 )
 
 
-def build_limits(profile: RiskProfile) -> list[Limit]:
+def build_limits(profile: RiskProfile, sleeves: list[Sleeve] | None = None) -> list[Limit]:
+    allocator: list[Limit] = []
+    if sleeves:
+        weights = normalise_weights(sleeves)
+        allocator.append(SleeveBudget(
+            caps={name: profile.max_open_risk * w for name, w in weights.items()},
+            portfolio_cap=profile.max_open_risk,
+        ))
     return [
         KillSwitch(),
         DailyLoss(profile.daily_loss_soft, profile.daily_loss_hard),
@@ -42,6 +51,7 @@ def build_limits(profile: RiskProfile) -> list[Limit]:
         MaxConcurrentPositions(profile.max_concurrent_positions),
         SpreadGuard(profile.max_spread_multiple),
         ConsecutiveLosses(profile.consecutive_losses, profile.consecutive_loss_pause_hours),
+        *allocator,
     ]
 
 
@@ -49,9 +59,10 @@ def build_engine(
     profile: RiskProfile,
     starting_equity: float,
     specs: dict[str, SymbolSpec] | None = None,
+    sleeves: list[Sleeve] | None = None,
 ) -> RiskEngine:
     return RiskEngine(
-        limits=build_limits(profile),
+        limits=build_limits(profile, sleeves),
         book=SessionBook.open(starting_equity),
         risk_per_trade=profile.risk_per_trade,
         specs=specs,

@@ -432,7 +432,7 @@ python scripts/verify_roundtrip_ib.py --fake                       # the whole p
 python scripts/backtest_futures.py --synthetic --universe full     # 33 markets through the stitch and the engine, no data
 python scripts/download_cot.py --years 15                          # free, real
 python research/cot_screen.py                                      # positioning as a signal
-set DATABENTO_API_KEY=db-...
+$env:DATABENTO_API_KEY = "db-..."                                  # PowerShell; cmd: set DATABENTO_API_KEY=db-...
 python scripts/download_databento.py --dry-run --universe full     # Databento's own cost estimate, spends nothing
 python scripts/download_databento.py --universe full               # daily bars, every expiry, since 2010
 python scripts/backtest_futures.py --universe full --equity 2000000 --size-as full --lookbacks 20 60 120               # 007

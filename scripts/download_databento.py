@@ -1,6 +1,8 @@
 """Fetch per-expiry daily bars for the futures research universe from Databento.
 
-    set DATABENTO_API_KEY=db-...          (Windows)   export DATABENTO_API_KEY=db-...   (POSIX)
+    $env:DATABENTO_API_KEY = "db-..."     (PowerShell, this session)
+    setx DATABENTO_API_KEY "db-..."       (Windows, every future shell)
+    export DATABENTO_API_KEY=db-...       (POSIX)
     python scripts/download_databento.py --dry-run                     # cost estimate only, spends nothing
     python scripts/download_databento.py --universe full --since 2010  # all 33 research markets
     python scripts/download_databento.py --roots ES GC ZN
@@ -86,7 +88,9 @@ def main() -> int:
     key = os.environ.get("DATABENTO_API_KEY")
     if not key:
         print("DATABENTO_API_KEY is not set.")
-        print("  Get a key at databento.com (new accounts carry free credit), then:  set DATABENTO_API_KEY=db-...")
+        print("  Get a key at databento.com (new accounts carry free credit), then, in your own shell:")
+        print('    PowerShell:  $env:DATABENTO_API_KEY = "db-..."      cmd:  set DATABENTO_API_KEY=db-...')
+        print("  Never paste the key into a chat or a file; the script reads it from the environment only.")
         print("  Daily bars are metered per gigabyte; the whole research universe is a few megabytes.")
         return 2
 

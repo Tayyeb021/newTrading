@@ -19,3 +19,6 @@ venv/
 *.egg-info/
 .vscode/
 .idea/
+
+# Purchased exchange history (Databento); licence forbids redistribution
+data/futures/

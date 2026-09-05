@@ -457,6 +457,16 @@ be held to expiry. Physically delivered ones — grains, metals, cattle, treasur
 The calendar anchors the roll on whichever comes first. The original ZN entry
 rolled off last trade and would have carried a long past first position day.
 
+**The verdicts, on real data (2026-09-05).** `research/futures_gauntlet.py --entry 007|008|009|010|010c`
+applies the thresholds exactly as pre-registered in the research log, at the 2×
+cost stress, and prints PASS or FAIL per line. Outcome: every daily-decided form
+died of turnover (positive gross, three dollars of friction per dollar of gross);
+the published monthly forms are alive at Sharpe 0.28 (trend), 0.21 (carry) and
+0.31 combined, with correlation 0.2 between them, and fail the declared bars of
+0.40 and 0.30. The yearly signs match the CTA industry's over the same fifteen
+years. Nothing is lowered after the fact; the log says what is and is not
+licensed from here.
+
 **Continuous positions (008) and carry (009).** `--continuous` makes the trend
 sleeves size by trend strength — the lookback return in units of the volatility
 expected over that horizon — and resize open positions through

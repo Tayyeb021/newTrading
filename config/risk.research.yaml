@@ -30,9 +30,14 @@ limits:
   max_drawdown_hard: 0.50
   drawdown_trailing: false
 
-  max_concurrent_positions: 40
-  max_open_risk: 0.15 # 30 positions at 0.5% -- breadth is the point
-  max_bucket_risk: 0.04 # one sector may not become the whole book
+  # Wide enough that a three-sleeve book on 33 markets can hold EVERY signal at
+  # once: 3 x 33 x 0.5% = 49.5% of equity at the stops. The first 007 run had
+  # these at 40 / 0.15 / 0.04 and refused 173,000 signals on budget grounds, so
+  # it measured a first-come-first-served subset, not the signal. Widened before
+  # any result was read as a result; the numbers from that run are in the log.
+  max_concurrent_positions: 120
+  max_open_risk: 0.60
+  max_bucket_risk: 0.15 # 7 markets x 3 sleeves x 0.5% = 10.5%; room for a fourth sleeve
   consecutive_losses: 100 # effectively off; a trend book loses six in a row routinely
   consecutive_loss_pause_hours: 1
   min_margin_level: 1.5

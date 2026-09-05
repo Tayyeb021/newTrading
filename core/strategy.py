@@ -63,6 +63,16 @@ def forecast_to_confidence(forecast: float, cap: float = 2.0, floor: float = 0.2
     return max(strength, floor)
 
 
+def is_month_start(df: pd.DataFrame, i: int) -> bool:
+    """True on the first bar of a calendar month. A decision cadence defined by
+    the calendar rather than by row position, so it is identical in a backtest
+    over a full frame and live over a rolling window."""
+    if i <= 0:
+        return True
+    ts = df["ts"]
+    return ts.iloc[i].month != ts.iloc[i - 1].month or ts.iloc[i].year != ts.iloc[i - 1].year
+
+
 class Strategy(ABC):
     """One instrument, one strategy. Portfolio composition happens above this."""
 

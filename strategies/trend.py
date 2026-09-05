@@ -38,7 +38,7 @@ import pandas as pd
 
 from core.strategy import FLAT, Intent, Strategy, forecast_to_confidence
 from core.types import Position, Side
-from features.indicators import atr, ema, realized_vol, rolling_percentile, rolling_return
+from features.indicators import atr, ema, price_vol, rolling_percentile
 
 
 class TrendFollowing(Strategy):
@@ -67,13 +67,18 @@ class TrendFollowing(Strategy):
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         df["atr"] = atr(df, self.atr_period)
         df["ema"] = ema(df["close"], self.ema_period)
-        df["mom"] = rolling_return(df["close"], self.lookback)
+        # Momentum as a price DIFFERENCE, not a percentage. Same sign on any
+        # ordinary series; on a back-adjusted futures series - which is the real
+        # one plus a constant per roll, with no meaningful level - it is the only
+        # form that means anything.
+        df["mom"] = df["close"] - df["close"].shift(self.lookback)
         if self.vol_filter_percentile is not None:
             df["atr_pct"] = rolling_percentile(df["atr"], 252)
-        # Trend strength: the lookback return over the volatility expected across
-        # that horizon. Comparable across a bond and a gas contract, which is what
-        # lets one cap serve the whole universe.
-        horizon_vol = realized_vol(df["close"], self.lookback) / np.sqrt(252.0) * np.sqrt(self.lookback)
+        # Trend strength: the lookback move over the volatility expected across
+        # that horizon - a t-statistic for the trend, in the same shift-invariant
+        # units. Comparable across a bond and a gas contract, which is what lets
+        # one cap serve the whole universe.
+        horizon_vol = price_vol(df["close"], self.lookback) * np.sqrt(self.lookback)
         df["forecast"] = df["mom"] / horizon_vol.replace(0.0, np.nan)
         return df
 
@@ -114,7 +119,7 @@ class TrendFollowing(Strategy):
             side=side,
             stop_distance=stop_distance,
             confidence=confidence,
-            reason=f"mom={mom:+.3f} close_vs_ema={close - ema_now:+.5f}"
+            reason=f"mom={mom:+.5g} close_vs_ema={close - ema_now:+.5g}"
                    + (f" f={row['forecast']:+.2f}" if self.continuous else ""),
         )
 

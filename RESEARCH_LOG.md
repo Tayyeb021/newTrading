@@ -386,3 +386,177 @@ Pass thresholds:
 
 Fail 1 and carry is dead here. Pass 1 and fail 2 or 3 and carry is reported
 real but redundant, which is also worth knowing.
+
+### 007-009, amendments made before any result was read (2026-09-05)
+
+The download landed and the first stitch pass exposed three things. All were
+fixed before a single equity curve was looked at; they are recorded here so
+nobody can later claim the definition moved after the fact.
+
+- **Data, parsing.** A raw CME ticker carries one year digit. One stray print
+  of NQ December 2029 (NQZ9) was clamped into the present by an assumption
+  that no contract lists more than two years out, and overwrote NQ December
+  2019 with one row; the stitch then failed at the September 2019 roll. The
+  clamp is gone, segments of one contract are merged instead of overwritten,
+  and the raw download is kept under `data/futures/_raw` so any future parse
+  is free. The full universe was downloaded twice; $21 of the free credit.
+- **Data, validation.** CL May 2020 was refused for a non-positive price. It
+  printed -37.63 on 2020-04-20; that is history, not corruption. Futures files
+  are validated with non-positive prices allowed; CFDs are not.
+- **Estimator.** Momentum in `TrendFollowing` was a percentage return and the
+  008 forecast divided it by log-return volatility. A back-adjusted series is
+  the real one plus a constant per roll: its level is meaningless and can be
+  negative, so ratios and logs are undefined on it. Momentum is now the price
+  difference over the lookback (same sign on any positive series, so 007's
+  rule is unchanged where it was already defined) and the 008 forecast is that
+  difference over the standard deviation of one-day price changes times the
+  square root of the horizon - the same t-statistic, shift-invariant. The cap
+  and floor are unchanged.
+- **Not an error.** ES term drag of about +38 index points a year is real: with
+  rates above the dividend yield since 2022, the next contract trades above the
+  front, and a long pays it. It is the carry signal, seen from the cost side.
+
+---
+
+## 007 — VERDICT: **DEAD in this form.** 008 — **DEAD.** 009 — **DEAD in this form.**
+
+*2026-09-05, real Databento data, 33 markets, 2011-2026, $20M so one contract is
+always inside the risk budget, 2x cost stress, research profile with caps wide
+enough to hold every signal. `research/futures_gauntlet.py`, numbers in
+`state/gauntlet_00{7,8,9}.json`.*
+
+| | 007 discrete trend 20/60/120 | 008 continuous | 009 carry, continuous |
+|---|---|---|---|
+| net Sharpe | **-0.02** | -0.41 | -0.71 |
+| max drawdown | 84% | 96% | 96% |
+| positive years | 4 / 15 | 4 / 15 | 2 / 15 |
+| positive sectors | 1 / 7 | 0 / 7 | 2 / 7 |
+| PBO across speeds | 0.54 | - | - |
+| trades (+ resizes) | 28,606 | 56,707 (+ resizes) | 18,648 (+ 37,022) |
+| gross P&L | +8.9M | | +10.6M |
+| friction | 26.1M = 295% of gross | 177% | 32.5M = 306% |
+
+Five of six thresholds failed for 007 (only the deflated Sharpe "passes", at
+0.000, because a negative Sharpe is trivially not above noise). 008 was
+judged against 007 and is worse on Sharpe and drawdown. 009 failed all three
+of its own.
+
+### What the failure is, and is not
+
+The plumbing is right. The slow rule on gold alone earns +$2.2M on $20M at
+Sharpe 0.27, 23% win rate, +0.12R expectancy: the textbook trend shape. The
+S&P alone is positive. Both were the largest trends of the period and both
+were captured.
+
+The book died of **turnover**, not of the signal's sign. Gross P&L is
+positive in every run. Friction is three times gross. The rules as declared
+re-decide every day: the trend rule exits on any close through its moving
+average and re-enters the next morning, and re-enters immediately after a
+stop; the carry rule resizes whenever a daily forecast normalised by its own
+standard deviation moves a quarter, which in a market whose carry sits near
+zero is most days. That is 10 to 40 round trips a year per market. The
+published rules decide once a month and hold.
+
+One diagnostic run, not pre-registered and not a trial for any verdict: carry
+with resizing switched off, everything else identical. Sharpe **+0.15**, max
+drawdown 39%, **10 of 15 years positive**, 2,035 trades instead of 18,648,
+gross +4.6M against 3.5M friction. Same signal, one tenth of the trading,
+from -$43M to +$1.1M. That is the whole lesson of this entry.
+
+Not an error, for the record: ES term drag of about +38 points a year (rates
+above dividends since 2022) and GC of about +52 dollars a year (contango) are
+real and are the cost side of the carry signal.
+
+---
+
+## 010 — Published forms, monthly decisions — **PRE-REGISTERED, declared before running**
+
+*2026-09-05. Declared after reading 007-009's verdicts and the diagnostic
+above, and before any 010 number exists.*
+
+**Trend (`strategies/tsmom.py`).** Time-series momentum as in Moskowitz, Ooi
+and Pedersen (2012): the sign of the trailing price change over the lookback
+decides the side; the decision is taken on the FIRST BAR OF EACH MONTH only
+and held until the next; between decisions nothing re-enters, including after
+a stop. No moving-average filter. A 4-ATR disaster stop, because the risk
+engine will not hold an unstopped position, wide enough that the monthly
+decision, not the stop, is what normally closes a trade. Speeds 60, 120 and
+250 days (the published 12 months is 250) and their equal-weight ensemble.
+Discrete sizing at entry. Four trials.
+
+**Carry (`strategies/carry.py`, `normalise="price_vol"`).** Carry in risk
+units, as Carver runs it: the 20-day-smoothed annualised roll yield divided by
+the market's annualised price volatility (63-day, from price differences over
+the RAW front close, which the stitcher now carries). A quarter of a
+standard deviation of carry in a market with none is not a signal; ten percent
+of annual volatility is. Threshold 0.10, cap 0.50, decided on the first bar
+of each month, discrete, 4-ATR stop. Two trials: alone, and beside the trend
+ensemble. Running total 186.
+
+Thresholds are those already declared for the families: 007's six for the
+trend ensemble, 009's for carry (1a-1c alone; 2-3 for the combination), at
+the 2x cost stress, $20M full-size. No number is lowered for having failed.
+
+---
+
+## 010 — VERDICT: **alive, and below the bar. DEAD as declared.**
+
+*2026-09-05, same data, same $20M, same 2x cost stress, same research
+profile. `state/gauntlet_010*.json`.*
+
+| | 010 trend 60/120/250, monthly | 010 carry in risk units, monthly | trend + carry |
+|---|---|---|---|
+| net Sharpe | **0.28** | **0.21** | **0.31** |
+| max drawdown | 47% | 23% | 46% |
+| positive years | 7 / 15 | 9 / 15 | |
+| positive sectors | 4 / 7 | 4 / 7 | |
+| PBO across speeds | **0.00** | - | |
+| deflated Sharpe | 0.022 | | |
+| last five years Sharpe | **+0.43** | | |
+| trades | 4,244 | 824 | 4,738 |
+| friction / gross | **21%** | 20% | 21% |
+| carry vs trend correlation | | | **0.14-0.21** |
+
+Trend fails thresholds 1, 2 and 6 and passes 3, 4 and 5. Carry fails 1a and
+1c, passes 1b, and the combination passes both of its own conditions: the
+correlation is a fifth, and the book earns more than either sleeve alone
+(diversification ratio 1.34x). The declared rule is all-or-nothing, so the
+entry is reported dead in this form. No threshold is lowered.
+
+### What changed between 007 and 010, and what did not
+
+Same 33 markets, same data, same costs. Deciding once a month instead of
+once a day took friction from 295% of gross to 21%, the drawdown from 84% to
+47%, and the Sharpe from -0.02 to +0.28. The 12-month speed - the one
+Moskowitz, Ooi and Pedersen actually published - made +$19M at +0.32R
+expectancy across the universe; the 60-day speed lost $5.5M and the ensemble
+carried it. The order of the speeds is the same in every in-sample and
+out-of-sample half (PBO 0.00), which is what a real, slow effect looks like
+and what a fitted one never does.
+
+Yearly signs of the trend book: down 2012, 2016, 2017, 2018, 2019, 2023,
+2024; up 2013, 2014, 2015, 2020, 2021, 2022, 2025, with 2014 and 2022 the two
+large years. That is the signature of the trend-following industry over the
+same period - the large CTAs' index lost money in 2011, 2012, 2016, 2018 and
+2023 and made its decade in 2014 and 2022. The machine reproduces what the
+professionals lived through, at a Sharpe in the same region as theirs. The
+bar of 0.40 came from the century-long average; 2011-2026 was not an average
+fifteen years for trend, and the machine says so rather than flattering it.
+
+### What this does and does not license
+
+- **Not licensed:** picking the 250-day speed alone because it won. That
+  choice was not declared, and on this data it is not out of sample. It can
+  be declared now as entry 011 and tested only on data it has not seen: a
+  paper-traded record from here forward, which is the plan anyway.
+- **Not licensed:** trading this with the user's capital. Sharpe 0.3 with a
+  47% drawdown at $20M full-size is what it is; the capital ladder says what
+  a small account can hold of it, and the answer is little.
+- **Licensed, and the useful result:** the research machine is validated end
+  to end on real exchange data. It finds the effect that is there, at the
+  size the industry found it, and it refuses the ones that are not. Every
+  earlier family died at the signal; this one is alive at the signal and
+  fails only the bar.
+
+Trials: 186. Every family with published evidence has now been tested in
+the form the evidence was published in.

@@ -70,7 +70,10 @@ def stitch(
         lo = w.active_from
         hi = w.roll_on
         piece = f[(f["day"] >= lo) & (f["day"] < hi)] if i < len(windows) - 1 else f[f["day"] >= lo]
-        piece = piece.assign(contract=root.code(w.year, w.month), carry=float("nan"))
+        # raw_close survives the back-adjustment below: it is the price that
+        # actually printed, for anything that needs a level (carry in risk units)
+        piece = piece.assign(contract=root.code(w.year, w.month), carry=float("nan"),
+                             raw_close=piece["close"].to_numpy())
 
         if i < len(windows) - 1:
             nxt = windows[i + 1]

@@ -76,8 +76,13 @@ class Gap:
         )
 
 
-def validate(df: pd.DataFrame, symbol: str) -> None:
-    """Raise on anything that would silently corrupt a backtest."""
+def validate(df: pd.DataFrame, symbol: str, *, allow_nonpositive: bool = False) -> None:
+    """Raise on anything that would silently corrupt a backtest.
+
+    `allow_nonpositive` is for futures, which can print at or below zero: WTI
+    May 2020 settled at -37.63 on 2020-04-20. For a CFD or a spot rate a
+    non-positive price is corruption and stays refused.
+    """
     if df.empty:
         return
 
@@ -100,7 +105,7 @@ def validate(df: pd.DataFrame, symbol: str) -> None:
     ohlc = df[["open", "high", "low", "close"]]
     if ohlc.isna().any().any():
         raise DataError(f"{symbol}: NaN in OHLC")
-    if (ohlc <= 0).any().any():
+    if not allow_nonpositive and (ohlc <= 0).any().any():
         raise DataError(f"{symbol}: non-positive price in OHLC")
 
     bad_range = df["high"] < df["low"]

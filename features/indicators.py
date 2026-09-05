@@ -66,6 +66,17 @@ def realized_vol(series: pd.Series, period: int, periods_per_year: int = 252) ->
     return log_ret.rolling(period, min_periods=period).std() * np.sqrt(periods_per_year)
 
 
+def price_vol(series: pd.Series, period: int) -> pd.Series:
+    """Standard deviation of one-bar price CHANGES, in price units, per bar.
+
+    Shift-invariant, which `realized_vol` is not: a back-adjusted futures
+    series is the real series plus a constant per roll, so its level means
+    nothing and can even be negative far back in history. Differences survive
+    that; ratios and logs do not.
+    """
+    return series.diff().rolling(period, min_periods=period).std()
+
+
 def donchian(df: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series]:
     """Highest high and lowest low over the previous `period` bars, EXCLUDING now.
 

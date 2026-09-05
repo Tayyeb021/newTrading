@@ -467,6 +467,16 @@ the published monthly forms are alive at Sharpe 0.28 (trend), 0.21 (carry) and
 years. Nothing is lowered after the fact; the log says what is and is not
 licensed from here.
 
+**Breadth (012).** The universe is 46 CME Group markets in ten sectors:
+`CORE_UNIVERSE` is the 33 of entries 007-011, and thirteen more (Brent,
+palladium, peso, rand, real, Nikkei, MidCap, oats, rice, SOFR, fed funds, the
+ultra 10-year, bitcoin) were added with specs and expiries read from the
+exchange's definition records, which `tests/test_calendar_vs_exchange.py`
+checks every rule against. ICE and Eurex were priced first and are out of
+reach on this data plan. Outcome: 0.31 against 0.28 on the same rules, the
+drawdown larger, carry worse; breadth within one exchange group is exhausted.
+`research/futures_gauntlet.py --entry 012` judges the saved wide runs.
+
 **Book-level volatility targeting (011).** `risk/voltarget.py` sizes every
 position on the monthly decision day together: equal daily cash volatility per
 market, the whole book scaled to a 12% annualised target from a shrunk 126-day

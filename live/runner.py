@@ -41,8 +41,21 @@ from ops.journal import Journal
 from risk.engine import RiskEngine
 from risk.killswitch import KillFile
 from risk.limits import Severity
+from risk.voltarget import Allocation, LegIntent, VolTarget
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class Decided:
+    """One leg's view on its newly closed bar, before the book is sized."""
+
+    sleeve: str
+    symbol: str
+    strategy: Strategy
+    intent: object
+    held_all: list[Position]
+    last_ts: datetime
 
 
 @dataclass
@@ -137,11 +150,17 @@ class Runner:
         state: StateStore | None = None,
         journal: Journal | None = None,
         kill: KillFile | None = None,
+        allocator: VolTarget | None = None,
     ) -> None:
         self.adapter = adapter
         self.risk = risk
         self.specs = specs or {}
         self.timeframe = timeframe
+        #: Entry 011: with an allocator, every leg decides first and the book is
+        #: sized once, to its volatility target, before anything is sent. The
+        #: allocator's window is in daily bars, so it only serves daily legs.
+        self.allocator = allocator
+        self._fed: dict[str, datetime] = {}
         # Legs: one (sleeve, symbol, strategy) each. A legacy symbol->strategy
         # dict becomes a single sleeve named "default".
         self.legs: list[tuple[str, str, Strategy, str]] = []
@@ -154,6 +173,10 @@ class Runner:
                 strat.name = "default"
                 self.legs.append(("default", sym, strat, timeframe))
         self.strategies = {sym: strat for _, sym, strat, _ in self.legs}
+        if self.allocator is not None:
+            bad = [(s, sym, tf) for s, sym, _, tf in self.legs if tf != "D1"]
+            if bad:
+                raise ValueError(f"volatility targeting needs daily legs; these are not: {bad}")
         self.poll_seconds = poll_seconds
         self.state = state or StateStore()
         self.journal = journal or Journal()
@@ -205,9 +228,29 @@ class Runner:
             self.risk.book.kill(record.reason)
             notes.append(str(record))
 
+        if self.allocator is not None:
+            notes.append(self._seed_allocator())
+
         self.worker.start()
         self.journal.write("startup", notes=notes, equity=account.equity)
         return notes
+
+    def _seed_allocator(self) -> str:
+        """Fill the allocator's window from bar history, so a restart is not blind."""
+        seeded = 0
+        for symbol, spec in self.specs.items():
+            try:
+                bars = self.adapter.bars(symbol, "D1", count=self.allocator.window + 2)
+            except Exception:  # noqa: BLE001
+                continue
+            closed = bars[:-1]
+            for prev, cur in zip(closed, closed[1:]):
+                self.allocator.observe(cur.ts.date(), {symbol: (cur.close - prev.close) * spec.value_per_price_unit})
+            if closed:
+                self._fed[symbol] = closed[-1].ts
+            seeded += 1
+        ready = sum(1 for s in self.specs if self.allocator.ready(s))
+        return f"volatility target {self.allocator.target:.0%}: history seeded for {seeded} symbols, {ready} ready"
 
     def _default_stop_distances(self) -> dict[str, float]:
         """Fallback stops for repair: 2x the last daily range. Crude on purpose.
@@ -304,14 +347,26 @@ class Runner:
                     log.exception("roll failed for %s: %s", symbol, exc)
                     self.journal.write("roll_error", symbol=symbol, error=str(exc))
 
-        # 3. strategy evaluation, only on a newly closed bar
+        # 3. strategy evaluation, only on a newly closed bar. Two passes: every
+        #    leg decides, the book is sized once, then each leg acts.
         if not self.halted:
+            decided: list[Decided] = []
             for sleeve_name, symbol, strategy, tf in self.legs:
                 try:
-                    self._evaluate(sleeve_name, symbol, strategy, tf, state, now)
+                    item = self._intent(sleeve_name, symbol, strategy, tf, state)
                 except Exception as exc:  # noqa: BLE001
                     log.exception("%s/%s: %s", sleeve_name, symbol, exc)
                     self.journal.write("strategy_error", sleeve=sleeve_name, symbol=symbol, error=str(exc))
+                    continue
+                if item is not None:
+                    decided.append(item)
+            plan = self._allocate(decided, state) if (self.allocator is not None and decided) else {}
+            for item in decided:
+                try:
+                    self._act(item, state, now, plan.get((item.sleeve, item.symbol)))
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("%s/%s: %s", item.sleeve, item.symbol, exc)
+                    self.journal.write("strategy_error", sleeve=item.sleeve, symbol=item.symbol, error=str(exc))
 
         # 4. collect fills, record, persist
         for result in self.worker.drain():
@@ -327,21 +382,30 @@ class Runner:
         )
         self._persist()
 
-    def _evaluate(self, sleeve_name: str, symbol: str, strategy: Strategy, timeframe: str,
-                  state, now: datetime) -> None:
+    def _intent(self, sleeve_name: str, symbol: str, strategy: Strategy, timeframe: str,
+                state) -> "Decided | None":
+        """What this leg wants on its newly closed bar, or None if there is none."""
         import pandas as pd
 
         bars = self.adapter.bars(symbol, timeframe, count=strategy.warmup + 60)
         if len(bars) < strategy.warmup + 2:
-            return
+            return None
 
         # Only act on a CLOSED bar. The most recent bar is still forming, so it
         # is dropped - acting on a partial bar is live-trading's look-ahead bug.
         closed = bars[:-1]
         last_ts = closed[-1].ts
         if self._last_bar.get((sleeve_name, symbol)) == last_ts:
-            return
+            return None
         self._last_bar[(sleeve_name, symbol)] = last_ts
+
+        # the allocator learns each completed bar once, whichever leg saw it first
+        if self.allocator is not None and self._fed.get(symbol) != last_ts and len(closed) >= 2:
+            spec = self.specs.get(symbol)
+            if spec is not None:
+                self.allocator.observe(last_ts.date(), {
+                    symbol: (closed[-1].close - closed[-2].close) * spec.value_per_price_unit})
+            self._fed[symbol] = last_ts
 
         df = pd.DataFrame([{
             "ts": b.ts, "open": b.open, "high": b.high,
@@ -355,6 +419,52 @@ class Runner:
         held_all = [p for p in state.positions if p.symbol == symbol and sleeve_of(p) == sleeve_name]
         held = held_all[0] if held_all else None
         intent = strategy.evaluate(df, len(df) - 1, held)
+        return Decided(sleeve_name, symbol, strategy, intent, held_all, last_ts)
+
+    def _allocate(self, decided: list["Decided"], state) -> dict:
+        """Size the whole book: legs deciding now are free, everything else held."""
+        intents: list[LegIntent] = []
+        deciding = {(d.sleeve, d.symbol): d for d in decided}
+        for d in decided:
+            spec = self.specs.get(d.symbol)
+            if spec is None or d.intent.flat:
+                continue
+            held = d.held_all[0] if d.held_all else None
+            sizing_now = held is None or d.intent.side is not held.side or (d.strategy.rebalances and d.intent.resize)
+            if sizing_now:
+                intents.append(LegIntent((d.sleeve, d.symbol), d.symbol, d.intent.side, d.intent.stop_distance,
+                                         spec.value_per_price_unit))
+        held_by_key: dict[tuple[str, str], list[Position]] = {}
+        for p in state.positions:
+            held_by_key.setdefault((sleeve_of(p), p.symbol), []).append(p)
+        for key, ps in held_by_key.items():
+            d = deciding.get(key)
+            if d is not None and (d.intent.flat or d.intent.side is not ps[0].side
+                                  or (d.strategy.rebalances and d.intent.resize)):
+                continue  # closing, flipping, or being resized above
+            spec = self.specs.get(key[1])
+            if spec is None:
+                continue
+            volume = sum(p.volume for p in ps)
+            stops = [abs(p.entry_price - p.stop_loss) for p in ps if p.stop_loss is not None]
+            intents.append(LegIntent(key, key[1], ps[0].side, max(stops) if stops else 0.0,
+                                     spec.value_per_price_unit, held_contracts=volume))
+        plan = self.allocator.allocate(state.equity, intents)
+        for key, alloc in plan.items():
+            self.journal.write("allocation", sleeve=key[0], symbol=key[1], contracts=alloc.contracts,
+                               risk_fraction=alloc.risk_fraction, note=alloc.note)
+        return plan
+
+    @staticmethod
+    def _sizing(alloc: Allocation | None) -> tuple[float | None, float | None]:
+        if alloc is None or alloc.risk_fraction is None:
+            return None, None  # the engine's own risk per trade
+        return alloc.risk_fraction, alloc.contracts
+
+    def _act(self, item: "Decided", state, now: datetime, alloc: Allocation | None = None) -> None:
+        sleeve_name, symbol, strategy, intent, held_all, last_ts = (
+            item.sleeve, item.symbol, item.strategy, item.intent, item.held_all, item.last_ts)
+        held = held_all[0] if held_all else None
 
         if intent.flat:
             for p in held_all:
@@ -362,15 +472,22 @@ class Runner:
                 self.worker.close_ticket(p.ticket)
             return
         if held is not None and held.side is intent.side:
-            if strategy.rebalances:
-                self._rebalance(sleeve_name, symbol, strategy, intent, held_all, state, now, last_ts)
+            if strategy.rebalances and intent.resize:
+                self._rebalance(sleeve_name, symbol, strategy, intent, held_all, state, now, last_ts, alloc)
+            return
+
+        spec = self.specs.get(symbol)
+        if alloc is not None and alloc.risk_fraction is not None and spec is not None \
+                and alloc.contracts < spec.volume_min:
+            self.journal.write("vol_target_skip", symbol=symbol, sleeve=sleeve_name, note=alloc.note)
             return
 
         signal = Signal(
             symbol=symbol, side=intent.side, stop_distance=intent.stop_distance,
             confidence=intent.confidence, strategy=strategy.name, ts=now,
         )
-        decision = self.risk.evaluate(signal, state)
+        risk_fraction, max_volume = self._sizing(alloc)
+        decision = self.risk.evaluate(signal, state, risk_fraction=risk_fraction, max_volume=max_volume)
         self.journal.decision(signal, decision, {
             "equity": state.equity,
             "daily": state.daily_pnl_fraction,
@@ -390,7 +507,8 @@ class Runner:
         self.worker.submit(decision.order, cid)
 
     def _rebalance(self, sleeve_name: str, symbol: str, strategy: Strategy, intent,
-                   held: list[Position], state, now: datetime, last_ts) -> None:
+                   held: list[Position], state, now: datetime, last_ts,
+                   alloc: Allocation | None = None) -> None:
         """A continuous strategy re-proposed its view on a position it holds.
 
         On a hedging venue several tickets can make up one leg; they are judged
@@ -411,7 +529,9 @@ class Runner:
             symbol=symbol, side=intent.side, stop_distance=intent.stop_distance,
             confidence=intent.confidence, strategy=strategy.name, ts=now,
         )
-        decision = self.risk.resize(signal, state, whole, inertia=strategy.inertia)
+        risk_fraction, max_volume = self._sizing(alloc)
+        decision = self.risk.resize(signal, state, whole, inertia=strategy.inertia,
+                                    risk_fraction=risk_fraction, max_volume=max_volume)
         self.journal.write(
             "resize", symbol=symbol, sleeve=sleeve_name, action=decision.action, held=volume,
             target=decision.target_volume, delta=decision.delta, stop=decision.stop_loss,

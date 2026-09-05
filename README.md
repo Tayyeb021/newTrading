@@ -467,6 +467,18 @@ the published monthly forms are alive at Sharpe 0.28 (trend), 0.21 (carry) and
 years. Nothing is lowered after the fact; the log says what is and is not
 licensed from here.
 
+**Book-level volatility targeting (011).** `risk/voltarget.py` sizes every
+position on the monthly decision day together: equal daily cash volatility per
+market, the whole book scaled to a 12% annualised target from a shrunk 126-day
+covariance, a 1% per-position cap, nothing touched between decisions
+(`Intent.resize=False`). It proposes a contract count and the risk fraction it
+implies; the risk engine still decides. Wired into the portfolio backtester and
+the live runner, which sizes the book in one pass after every leg has decided.
+Outcome on the same data: it holds its target (13.6% realised) and trims the
+drawdown from 47% to 41%, and the monthly resizes cost twenty points of friction
+that a signal losing in 2023-25 could not pay for. Dead as declared; entry 011 in
+the log.
+
 **Continuous positions (008) and carry (009).** `--continuous` makes the trend
 sleeves size by trend strength — the lookback return in units of the volatility
 expected over that horizon — and resize open positions through

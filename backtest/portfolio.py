@@ -36,6 +36,7 @@ from core.sleeve import Sleeve, normalise_weights, tag
 from core.strategy import Intent, Strategy
 from core.types import Position, Side, Signal, SymbolSpec
 from risk.engine import RiskEngine
+from risk.voltarget import Allocation, LegIntent, VolTarget
 
 
 @dataclass
@@ -90,9 +91,14 @@ class PortfolioBacktester:
         costs: CostModel,
         starting_equity: float = 100_000.0,
         reset_on_halt: bool = False,
+        allocator: VolTarget | None = None,
     ) -> None:
         if not sleeves:
             raise ValueError("a portfolio needs at least one sleeve")
+        #: Entry 011. With an allocator, every position sized on a bar is sized
+        #: together, to the book's volatility target; without one, each leg
+        #: risks its sleeve's fraction of equity to its stop.
+        self.allocator = allocator
         names = [s.name for s in sleeves]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate sleeve names: {names}")
@@ -123,11 +129,13 @@ class PortfolioBacktester:
             self.risk.book.observe_equity(equity, today=ts.date())
             active = [leg for leg in legs if ts in leg.index_of]
 
-            # 1. execute what each leg decided on its previous bar, at this open
+            # 1. execute what each leg decided on its previous bar, at this open.
+            #    With an allocator the whole book is sized first, in one call.
+            plan = self._allocate(legs, active, equity) if self.allocator is not None else {}
             for leg in active:
                 if leg.pending is not None:
                     row = leg.df.iloc[leg.index_of[ts]]
-                    equity = self._apply_intent(leg, legs, row, ts, equity, result)
+                    equity = self._apply_intent(leg, legs, row, ts, equity, result, plan.get(leg.key))
                     leg.pending = None
 
             # 2. resolve open positions against this bar's range
@@ -157,6 +165,16 @@ class PortfolioBacktester:
             stamps.append(ts)
             for name in unreal:
                 sleeve_curves[name].append(realised[name] + unreal[name])
+
+            # 3b. the allocator learns this completed bar: cash move of one contract
+            if self.allocator is not None:
+                changes: dict[str, float] = {}
+                for leg in active:
+                    i = leg.index_of[ts]
+                    if i > 0 and leg.symbol not in changes:
+                        prev = float(leg.df.iloc[i - 1]["close"])
+                        changes[leg.symbol] = (float(leg.df.iloc[i]["close"]) - prev) * leg.spec.value_per_price_unit
+                self.allocator.observe(ts.date(), changes)
 
             # 4. decide for the NEXT bar, closed data only
             for leg in active:
@@ -200,7 +218,38 @@ class PortfolioBacktester:
 
     # ------------------------------------------------------------- per-leg
 
-    def _apply_intent(self, leg: Leg, legs: list[Leg], row, ts, equity, result) -> float:
+    def _allocate(self, legs: list[Leg], active: list[Leg], equity: float) -> dict:
+        """Ask the allocator for every position being sized on this bar, with
+        every position being held counted toward the book's volatility."""
+        intents: list[LegIntent] = []
+        for leg in legs:
+            pending = leg.pending if leg in active else None
+            sizing_now = (
+                pending is not None and not pending.flat and (
+                    leg.position is None
+                    or pending.side is not leg.position.side
+                    or (leg.strategy.rebalances and pending.resize)
+                )
+            )
+            if sizing_now:
+                intents.append(LegIntent(leg.key, leg.symbol, pending.side, pending.stop_distance,
+                                         leg.spec.value_per_price_unit))
+            elif leg.position is not None and not (pending is not None and pending.flat):
+                intents.append(LegIntent(leg.key, leg.symbol, leg.position.side,
+                                         abs(leg.position.entry_price - leg.stop_price),
+                                         leg.spec.value_per_price_unit, held_contracts=leg.position.volume))
+        return self.allocator.allocate(equity, intents)
+
+    @staticmethod
+    def _sizing(leg: Leg, alloc: Allocation | None) -> tuple[float, float | None]:
+        """Risk fraction and contract cap for this leg: the allocator's if it
+        had history for the market, else the sleeve's default."""
+        if alloc is None or alloc.risk_fraction is None:
+            return leg.sleeve.risk_per_trade, None
+        return alloc.risk_fraction, alloc.contracts
+
+    def _apply_intent(self, leg: Leg, legs: list[Leg], row, ts, equity, result,
+                      alloc: Allocation | None = None) -> float:
         intent = leg.pending
         open_price = float(row["open"])
 
@@ -211,9 +260,13 @@ class PortfolioBacktester:
         if intent.flat:
             return equity
         if leg.position is not None:
-            if leg.strategy.rebalances:
-                return self._resize(leg, legs, intent, row, ts, equity, result)
+            if leg.strategy.rebalances and intent.resize:
+                return self._resize(leg, legs, intent, row, ts, equity, result, alloc)
             return equity
+
+        if alloc is not None and alloc.risk_fraction is not None and alloc.contracts < leg.spec.volume_min:
+            result.rejections["vol_target"] = result.rejections.get("vol_target", 0) + 1
+            return equity  # the book is at its volatility target without this position
 
         others = [l.position for l in legs if l is not leg and l.position is not None]
         state = self.risk.snapshot(
@@ -224,9 +277,8 @@ class PortfolioBacktester:
             symbol=leg.symbol, side=intent.side, stop_distance=intent.stop_distance,
             confidence=intent.confidence, strategy=leg.strategy.name, ts=ts,
         )
-        decision = self.risk.evaluate(
-            signal, state, risk_fraction=leg.sleeve.risk_per_trade,
-        )
+        risk_fraction, max_volume = self._sizing(leg, alloc)
+        decision = self.risk.evaluate(signal, state, risk_fraction=risk_fraction, max_volume=max_volume)
         if not decision.approved:
             key = decision.breaches[0].limit if decision.breaches else decision.note.split(":")[0]
             result.rejections[key] = result.rejections.get(key, 0) + 1
@@ -255,12 +307,14 @@ class PortfolioBacktester:
         leg.exc_hi = leg.exc_lo = 0.0
         return equity
 
-    def _resize(self, leg: Leg, legs: list[Leg], intent: Intent, row, ts, equity, result) -> float:
-        """A continuous strategy re-proposed its view on a position it holds.
+    def _resize(self, leg: Leg, legs: list[Leg], intent: Intent, row, ts, equity, result,
+                alloc: Allocation | None = None) -> float:
+        """A rebalancing strategy re-proposed its view on a position it holds.
 
         The decision is the risk engine's (`RiskEngine.resize`): ratchet the
         stop, size the target from the real distance to it, hold inside the
-        inertia band, reduce freely, increase only through the limits.
+        inertia band, reduce freely, increase only through the limits. With an
+        allocator the target is the book's, as a contract cap and risk fraction.
         """
         pos = leg.position
         open_price = float(row["open"])
@@ -273,8 +327,9 @@ class PortfolioBacktester:
             symbol=leg.symbol, side=intent.side, stop_distance=intent.stop_distance,
             confidence=intent.confidence, strategy=leg.strategy.name, ts=ts,
         )
+        risk_fraction, max_volume = self._sizing(leg, alloc)
         decision = self.risk.resize(
-            signal, state, pos, inertia=leg.strategy.inertia, risk_fraction=leg.sleeve.risk_per_trade,
+            signal, state, pos, inertia=leg.strategy.inertia, risk_fraction=risk_fraction, max_volume=max_volume,
         )
 
         # The stop only ever tightens; apply it whatever else happens.

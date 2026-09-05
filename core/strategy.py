@@ -31,6 +31,11 @@ class Intent:
     stop_distance: float = 0.0
     confidence: float = 1.0
     reason: str = ""
+    #: For a strategy that rebalances: may the engines resize an open position
+    #: toward this intent? A monthly rule says True on its decision day and
+    #: False on every day in between, which is how "hold" is expressed without
+    #: the engine having to know the calendar.
+    resize: bool = True
 
     @property
     def flat(self) -> bool:

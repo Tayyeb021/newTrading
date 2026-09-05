@@ -560,3 +560,96 @@ fifteen years for trend, and the machine says so rather than flattering it.
 
 Trials: 186. Every family with published evidence has now been tested in
 the form the evidence was published in.
+
+---
+
+## 011 — Book-level volatility targeting on the 010 forms — **PRE-REGISTERED, declared before running**
+
+*2026-09-05. Declared after 010's verdict and before any 011 number exists.*
+
+What 010 measured was raw signals under fixed risk per trade: a book whose
+volatility depends on how many signals happen to be on. Its 47% drawdown is
+that. Every professional trend program instead targets the book's volatility
+(Harvey et al. 2018, "The Impact of Volatility Targeting"; Moskowitz, Ooi &
+Pedersen scale each position by ex-ante volatility). 008 already showed what
+NOT to do: resize daily, per position, against an ATR-stop target, inside a
+tight band. This is the other thing.
+
+**Mechanism (`risk/voltarget.py`).** On the monthly decision day, every
+position being opened or held is sized together so that (a) each contributes
+the same daily cash volatility and (b) the book's ex-ante annualised
+volatility, from a 126-day covariance of daily cash P&L per contract shrunk
+half-way to the diagonal, equals 12%. Between decision days nothing is
+touched; the strategies say so with `Intent.resize=False`. The per-position
+risk to the stop is capped at the profile's 1%, so a book with two signals
+on does not become two enormous bets. The allocator proposes a contract count
+and the risk fraction it implies; the risk engine decides, exactly as for any
+order, and live the runner sizes the book in one pass the same way. Constants
+12% / 126 / 0.5 / 25% inertia are fixed from practice, not tuned.
+
+**Trials:** the 010 trend speeds 60/120/250 and their ensemble under the
+allocator (four), 010's carry under it (one), both together (one). Running
+total 192.
+
+**Pass thresholds, against 010 on the same data, same costs, same equity:**
+
+1. Ensemble net Sharpe ≥ 010's + 0.05. The literature's claim is an
+   improvement; a wash is a fail.
+2. Maximum drawdown ≤ 0.6 × 010's (47% → at most 28%).
+3. Realised book volatility within three points of the 12% target. The
+   mechanism has to do what it says.
+4. Friction ≤ 30% of gross. Monthly resizing must not reopen the 008 wound.
+5. PBO across the three speeds < 0.50.
+6. Last five years net Sharpe > 0.
+
+The family bar of 0.40 net Sharpe is reported alongside and remains the bar
+for calling anything tradeable. Nothing is lowered.
+
+---
+
+## 011 — VERDICT: **DEAD as declared. The mechanism works; the signals do not earn its cost here.**
+
+*2026-09-05, same data, $20M, 2x cost stress, research profile, allocator at
+12% with a 1% per-position cap. `state/gauntlet_011*.json`.*
+
+| | 010 trend | **011 trend, vol-targeted** | 010 carry | **011 carry** | 011 both |
+|---|---|---|---|---|---|
+| net Sharpe | 0.28 | **0.25** | 0.21 | **0.05** | 0.26 |
+| max drawdown | 47% | **41%** | 23% | 44% | |
+| realised book vol | | **13.6%** | | **11.6%** | 11.6% |
+| friction / gross | 21% | **41%** | 20% | 478% | |
+| PBO across speeds | 0.00 | 0.29 | | | |
+| last five years Sharpe | +0.43 | −0.04 | | | |
+| carry vs trend correlation | | | | | 0.05-0.28 |
+
+Trend: thresholds 3 and 5 pass, 1, 2, 4 and 6 fail. Carry: 1a-1c fail. The
+combination: the correlation line printed "None" through a naming slip in the
+report (the sleeve is `vcarry`); the matrix in the JSON reads 0.05 to 0.28,
+which passes, and the combined Sharpe beats either alone by a hundredth. Dead
+as declared, all the same.
+
+### Reading it
+
+- **The allocator does what it says.** Realised book volatility 13.6% and
+  11.6% against a 12% target, from a covariance estimated on the fly across
+  33 markets. Threshold 3 was the mechanism test and it passed.
+- **Volatility targeting cannot rescue a signal that is losing.** 2023-2025
+  cost the trend book $12.6M under 010 and $12.6M under 011: the same losses
+  at a steadier pace. The literature's Sharpe gain comes from markets whose
+  volatility rises as they fall; a flat signal delivers nothing to shape.
+- **Every fill costs.** 4,426 monthly resizes lifted friction from 21% to 41%
+  of gross, twenty points, which is where the Sharpe went. Carry, a small
+  signal on large vol-targeted positions, paid 478% of its gross to resize.
+  This is the second time resizing has been the cost that killed a form
+  (008 was the first); the industry pays it with institutional commissions
+  and patient execution, neither of which a retail account has.
+- **The one true improvement**, drawdown 47% to 41%, is real and too small.
+
+### What this closes
+
+Entries 007-011 have now tested trend and carry in their daily, continuous,
+published-monthly and volatility-targeted forms, alone and together, at 2x
+retail costs, on 15 years of the exchange's own data. The best net Sharpe
+across all of it is 0.31. The declared bar is 0.40. The gap is not a bug in
+this machine; it is the record of these fifteen years at these costs, and
+the industry's own index says the same. Trials: 192.

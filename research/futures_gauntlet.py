@@ -41,11 +41,12 @@ from core.sleeve import Sleeve  # noqa: E402
 from data.continuous import stitch  # noqa: E402
 from ml.stats import deflated_sharpe, probability_of_backtest_overfitting, sharpe  # noqa: E402
 from risk.build import build_engine  # noqa: E402
+from risk.voltarget import VolTarget  # noqa: E402
 from strategies.carry import Carry  # noqa: E402
 from strategies.trend import TrendFollowing  # noqa: E402
 from strategies.tsmom import TSMOM  # noqa: E402
 
-TRIALS_SO_FAR = 186  # RESEARCH_LOG running total after 010 was declared
+TRIALS_SO_FAR = 192  # RESEARCH_LOG running total after 011 was declared
 
 
 def load_universe(since: int, folder: Path, size_as: str):
@@ -79,7 +80,28 @@ def build_sleeves(names, kinds, lookbacks, continuous):
             sleeves.append(Sleeve(f"tsmom{lb}", (lambda s, lb=lb: TSMOM(lookback=lb)), tuple(names), timeframe="D1"))
     if "carry010" in kinds:
         sleeves.append(Sleeve("carry010", lambda s: Carry.published(), tuple(names), timeframe="D1"))
+    if "tsmom011" in kinds:  # entry 011: the 010 rule, resized monthly to the book's volatility target
+        for lb in lookbacks:
+            sleeves.append(Sleeve(f"vtsmom{lb}", (lambda s, lb=lb: TSMOM(lookback=lb, monthly_resize=True)),
+                                  tuple(names), timeframe="D1"))
+    if "carry011" in kinds:
+        sleeves.append(Sleeve("vcarry", lambda s: Carry.published(monthly_resize=True), tuple(names), timeframe="D1"))
     return sleeves
+
+
+def verdict_011(m: dict, base: dict, target: float) -> list[tuple[str, bool, str]]:
+    return [
+        ("1. net Sharpe >= 010's + 0.05", m["net_sharpe"] >= base["net_sharpe"] + 0.05,
+         f"{m['net_sharpe']:.2f} vs {base['net_sharpe']:.2f}"),
+        ("2. max drawdown <= 0.6 x 010's", m["max_drawdown"] <= 0.6 * base["max_drawdown"],
+         f"{m['max_drawdown']:.1%} vs {base['max_drawdown']:.1%}"),
+        (f"3. realised book vol within 3 points of {target:.0%}", abs(m["realised_vol"] - target) <= 0.03,
+         f"{m['realised_vol']:.1%}"),
+        ("4. friction share <= 30% of gross", m["friction_share"] <= 0.30, f"{m['friction_share']:.0%}"),
+        ("5. PBO across speeds < 0.50", (m["pbo"] is not None and m["pbo"] < 0.5), f"{m['pbo']}"),
+        ("6. last five years net Sharpe > 0", m["last5y_sharpe"] > 0, f"{m['last5y_sharpe']:.2f}"),
+        ("family bar, for the record: net Sharpe >= 0.40", m["net_sharpe"] >= 0.40, f"{m['net_sharpe']:.2f}"),
+    ]
 
 
 def yearly(equity: pd.Series) -> pd.Series:
@@ -97,6 +119,7 @@ def evaluate(result, specs, stress: float, trials: int) -> dict:
     sr_daily = sharpe(rets)
     out = {
         "net_sharpe": sr_daily * np.sqrt(252),
+        "realised_vol": float(np.std(rets, ddof=1) * np.sqrt(252)) if rets.size > 1 else 0.0,
         "max_drawdown": _drawdown(eq)[0],
         "final_equity": float(eq.iloc[-1]),
         "trades": len(result.trades),
@@ -183,7 +206,7 @@ def verdict_009(m: dict, combined: dict | None, trend: dict | None) -> list[tupl
     if combined is not None:
         corr = combined["sleeve_correlation"]
         rho = None
-        carry_name = next((k for k in corr if k.startswith("carry")), None)
+        carry_name = next((k for k in corr if "carry" in k), None)
         if carry_name is not None:
             others = [v for k, v in corr[carry_name].items() if k != carry_name]
             rho = max(others) if others else None
@@ -194,19 +217,24 @@ def verdict_009(m: dict, combined: dict | None, trend: dict | None) -> list[tupl
     return rows
 
 
-def run_book(bars, specs, trade, sleeves, equity, profile_name, stress):
+def run_book(bars, specs, trade, sleeves, equity, profile_name, stress, target_vol: float | None = None):
     profile = RiskProfile.load(profile_name)
     engine = build_engine(profile, equity, specs, sleeves)
     costs = CostModel.for_futures(trade).stressed(stress)
     names = list(FULL_UNIVERSE)
-    return PortfolioBacktester(sleeves, specs, engine, costs, starting_equity=equity,
-                               reset_on_halt=True).run({(s.name, n): bars[n] for s in sleeves for n in names})
+    allocator = None
+    if target_vol is not None:
+        allocator = VolTarget(target_annual_vol=target_vol, max_risk_fraction=profile.max_risk_per_trade)
+    return PortfolioBacktester(sleeves, specs, engine, costs, starting_equity=equity, reset_on_halt=True,
+                               allocator=allocator).run({(s.name, n): bars[n] for s in sleeves for n in names})
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c"], required=True,
-                    help="010 = published monthly trend, 010c = carry in risk units")
+    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c"], required=True,
+                    help="010 = published monthly trend, 010c = carry in risk units, "
+                         "011/011c = the same, resized monthly to the book's volatility target")
+    ap.add_argument("--target-vol", type=float, default=0.12, help="011: annualised book volatility target")
     ap.add_argument("--with-trend", action="store_true", help="009/010c: also run carry beside the trend ensemble")
     ap.add_argument("--lookbacks", nargs="+", type=int, default=None,
                     help="trend speeds; default 20 60 120 for 007/008, 60 120 250 for 010")
@@ -226,29 +254,33 @@ def main() -> int:
 
     results: dict[str, dict] = {}
     state = Path("state"); state.mkdir(exist_ok=True)
-    lookbacks = args.lookbacks or ([60, 120, 250] if args.entry.startswith("010") else [20, 60, 120])
+    monthly = args.entry.startswith(("010", "011"))
+    lookbacks = args.lookbacks or ([60, 120, 250] if monthly else [20, 60, 120])
+    target_vol = args.target_vol if args.entry.startswith("011") else None
 
-    if args.entry in ("007", "008", "010"):
-        kind = "tsmom" if args.entry == "010" else "trend"
+    if args.entry in ("007", "008", "010", "011"):
+        kind = {"007": "trend", "008": "trend", "010": "tsmom", "011": "tsmom011"}[args.entry]
         sleeves = build_sleeves(names, [kind], lookbacks, continuous=(args.entry == "008"))
-        res = run_book(bars, specs, trade, sleeves, args.equity, args.profile, args.stress)
+        res = run_book(bars, specs, trade, sleeves, args.equity, args.profile, args.stress, target_vol)
         print(portfolio_report(res))
         m = evaluate(res, specs, args.stress, args.trials)
         results["book"] = m
-        if args.entry == "008":
-            base_path = state / "gauntlet_007.json"
+        if args.entry in ("008", "011"):
+            base_name = "gauntlet_007.json" if args.entry == "008" else "gauntlet_010.json"
+            base_path = state / base_name
             if not base_path.exists():
-                raise SystemExit("run --entry 007 first; 008 is judged against it")
+                raise SystemExit(f"run the base entry first; {args.entry} is judged against {base_name}")
             base = json.loads(base_path.read_text())["book"]
-            rows = verdict_008(m, base)
+            rows = verdict_008(m, base) if args.entry == "008" else verdict_011(m, base, args.target_vol)
         else:
             rows = verdict_007(m)  # 010 is held to the same six thresholds
     else:
-        carry_kind = "carry010" if args.entry == "010c" else "carry"
-        trend_kind = "tsmom" if args.entry == "010c" else "trend"
-        trend_json = state / ("gauntlet_010.json" if args.entry == "010c" else "gauntlet_007.json")
+        carry_kind = {"009": "carry", "010c": "carry010", "011c": "carry011"}[args.entry]
+        trend_kind = {"009": "trend", "010c": "tsmom", "011c": "tsmom011"}[args.entry]
+        trend_json = state / {"009": "gauntlet_007.json", "010c": "gauntlet_010.json",
+                              "011c": "gauntlet_011.json"}[args.entry]
         carry_sleeves = build_sleeves(names, [carry_kind], [], False)
-        res = run_book(bars, specs, trade, carry_sleeves, args.equity, args.profile, args.stress)
+        res = run_book(bars, specs, trade, carry_sleeves, args.equity, args.profile, args.stress, target_vol)
         print(portfolio_report(res))
         m = evaluate(res, specs, args.stress, args.trials)
         results["carry"] = m
@@ -256,11 +288,14 @@ def main() -> int:
         if args.with_trend:
             trend = json.loads(trend_json.read_text())["book"] if trend_json.exists() else None
             both = build_sleeves(names, [trend_kind, carry_kind], lookbacks, False)
-            res2 = run_book(bars, specs, trade, both, args.equity, args.profile, args.stress)
+            res2 = run_book(bars, specs, trade, both, args.equity, args.profile, args.stress, target_vol)
             print(portfolio_report(res2))
             combined = evaluate(res2, specs, args.stress, args.trials)
             results["trend_plus_carry"] = combined
         rows = verdict_009(m, combined, trend)
+        if target_vol is not None:
+            rows.append((f"vol: realised book vol within 3 points of {target_vol:.0%}",
+                         abs(m["realised_vol"] - target_vol) <= 0.03, f"{m['realised_vol']:.1%}"))
 
     print(f"\nVERDICT, entry {args.entry}")
     print("=" * 70)

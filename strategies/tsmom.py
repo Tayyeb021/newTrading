@@ -45,13 +45,17 @@ class TSMOM(Strategy):
         atr_stop_multiple: float = 4.0,
         continuous: bool = False,
         forecast_cap: float = 2.0,
+        monthly_resize: bool = False,
     ) -> None:
         self.lookback = lookback
         self.atr_period = atr_period
         self.atr_stop_multiple = atr_stop_multiple
         self.continuous = continuous
         self.forecast_cap = forecast_cap
-        self.rebalances = continuous
+        #: Entry 011: on the decision day an open position may be resized to the
+        #: book's volatility target; between decision days it is held untouched.
+        self.monthly_resize = monthly_resize
+        self.rebalances = continuous or monthly_resize
         self.warmup = max(lookback, atr_period) + 5
         self._decided: tuple[Side | None, float] = (None, 1.0)
 
@@ -75,7 +79,8 @@ class TSMOM(Strategy):
             side, confidence = self._decided
             if side is not position.side:
                 side, confidence = position.side, 1.0  # adopted or restored position: keep it
-            return Intent(side=side, stop_distance=stop, confidence=confidence, reason="hold")
+            return Intent(side=side, stop_distance=stop, confidence=confidence, reason="hold",
+                          resize=self.continuous)  # a monthly rule does not touch it between decisions
 
         if pd.isna(mom) or mom == 0:
             self._decided = (None, 1.0)

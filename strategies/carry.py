@@ -52,6 +52,7 @@ class Carry(Strategy):
         normalise: str = "own_sd",
         vol_window: int = 63,
         decide_monthly: bool = False,
+        monthly_resize: bool = False,
     ) -> None:
         if normalise not in ("own_sd", "price_vol"):
             raise ValueError(f"normalise must be 'own_sd' or 'price_vol', got {normalise!r}")
@@ -65,16 +66,20 @@ class Carry(Strategy):
         self.normalise = normalise
         self.vol_window = vol_window
         self.decide_monthly = decide_monthly
-        self.rebalances = continuous
+        self.monthly_resize = monthly_resize
+        self.rebalances = continuous or monthly_resize
         window = norm_window // 2 if normalise == "own_sd" else vol_window
         self.warmup = max(window + smooth, atr_period) + 5
         self._decided: tuple[Side | None, float] = (None, 1.0)
 
     @classmethod
-    def published(cls) -> "Carry":
-        """The entry-010 form: carry in risk units, monthly, discrete, wide stop."""
+    def published(cls, monthly_resize: bool = False) -> "Carry":
+        """The entry-010 form: carry in risk units, monthly, discrete, wide stop.
+        With `monthly_resize`, the entry-011 form: resized to the book's
+        volatility target on decision days."""
         return cls(normalise="price_vol", decide_monthly=True, continuous=False,
-                   entry_threshold=0.10, forecast_cap=0.50, atr_stop_multiple=4.0)
+                   entry_threshold=0.10, forecast_cap=0.50, atr_stop_multiple=4.0,
+                   monthly_resize=monthly_resize)
 
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         df["atr"] = atr(df, self.atr_period)
@@ -108,7 +113,8 @@ class Carry(Strategy):
             side, confidence = self._decided
             if side is not position.side:
                 side, confidence = position.side, 1.0
-            return Intent(side=side, stop_distance=stop, confidence=confidence, reason="hold")
+            return Intent(side=side, stop_distance=stop, confidence=confidence, reason="hold",
+                          resize=self.continuous)
 
         if pd.isna(forecast) or abs(forecast) < self.entry_threshold:
             self._decided = (None, 1.0)

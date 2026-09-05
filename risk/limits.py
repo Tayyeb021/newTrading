@@ -91,6 +91,16 @@ class ProposedTrade:
     risk_cash: float
     risk_fraction: float
     strategy: str = ""
+    #: Volume this strategy already holds in the symbol. Non-zero means the
+    #: order is an INCREASE to an open position: the risk figures above are the
+    #: increment, and limits that count positions must not count it as new.
+    existing_volume: float = 0.0
+    #: Risk of the whole position after the increase, as a fraction of equity.
+    total_risk_fraction: float | None = None
+
+    @property
+    def is_increase(self) -> bool:
+        return self.existing_volume > 0
 
 
 class Limit(ABC):
@@ -242,10 +252,12 @@ class RiskPerTrade(Limit):
     def check(self, state: RiskState, trade: ProposedTrade | None) -> Breach | None:
         if trade is None:
             return None
-        if trade.risk_fraction > self.maximum + 1e-9:
+        # An increase is judged on the whole position it produces, not the slice.
+        worst = max(trade.risk_fraction, trade.total_risk_fraction or 0.0)
+        if worst > self.maximum + 1e-9:
             return self._breach(
-                f"trade risks {trade.risk_fraction:.3%}, maximum {self.maximum:.3%}",
-                trade.risk_fraction, self.maximum,
+                f"trade risks {worst:.3%}, maximum {self.maximum:.3%}",
+                worst, self.maximum,
             )
         return None
 
@@ -302,8 +314,8 @@ class MaxConcurrentPositions(Limit):
         self.maximum = maximum
 
     def check(self, state: RiskState, trade: ProposedTrade | None) -> Breach | None:
-        if trade is None:
-            return None
+        if trade is None or trade.is_increase:
+            return None  # adding to a position opens nothing new
         if len(state.positions) >= self.maximum:
             return self._breach(
                 f"{len(state.positions)} positions open, maximum {self.maximum}",

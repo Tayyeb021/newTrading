@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 from core.sleeve import Sleeve, sleeve_of
 from core.strategy import Strategy
-from core.types import OrderRequest, OrderResult, Position, Signal, SymbolSpec
+from core.types import OrderRequest, OrderResult, Position, Side, Signal, SymbolSpec
 from execution.base import ExecutionAdapter
 from execution.oms import OrderManager, client_id
 from live.state import StateStore, restore_book
@@ -47,10 +47,12 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class Job:
-    kind: str  # "submit" | "close_all" | "close_ticket"
+    kind: str  # "submit" | "close_all" | "close_ticket" | "modify"
     request: OrderRequest | None = None
     cid: str = ""
     ticket: int | None = None
+    volume: float | None = None  # close_ticket: partial close of this much; None = all
+    stop: float | None = None  # modify: the new stop, only ever tighter
 
 
 @dataclass
@@ -78,10 +80,14 @@ class ExecutionWorker:
     def close_all(self) -> None:
         self.inbox.put(Job("close_all"))
 
-    def close_ticket(self, ticket: int) -> None:
-        """Close one position. A strategy exiting its own trade must not flatten
-        every other strategy's positions too."""
-        self.inbox.put(Job("close_ticket", ticket=ticket))
+    def close_ticket(self, ticket: int, volume: float | None = None) -> None:
+        """Close one position, or part of it. A strategy exiting its own trade
+        must not flatten every other strategy's positions too."""
+        self.inbox.put(Job("close_ticket", ticket=ticket, volume=volume))
+
+    def modify_stop(self, ticket: int, stop: float) -> None:
+        """Ratchet a stop. Callers only ever pass a tighter level."""
+        self.inbox.put(Job("modify", ticket=ticket, stop=stop))
 
     def drain(self) -> list[OrderResult]:
         out: list[OrderResult] = []
@@ -106,9 +112,13 @@ class ExecutionWorker:
                         self.journal.fill(result, "flatten")
                         self.results.put(result)
                 elif job.kind == "close_ticket" and job.ticket is not None:
-                    result = self.oms.adapter.close(job.ticket)
-                    self.journal.fill(result, f"exit#{job.ticket}")
+                    result = self.oms.adapter.close(job.ticket, job.volume)
+                    self.journal.fill(result, f"{'trim' if job.volume else 'exit'}#{job.ticket}")
                     self.results.put(result)
+                elif job.kind == "modify" and job.ticket is not None:
+                    result = self.oms.adapter.modify(job.ticket, stop_loss=job.stop)
+                    self.journal.write("stop_ratchet", ticket=job.ticket, stop=job.stop,
+                                       status=result.status.value, reason=result.reason)
             except Exception as exc:  # noqa: BLE001 - the worker must never die
                 log.exception("execution worker error: %s", exc)
                 self.journal.write("worker_error", error=str(exc), job=job.kind)
@@ -342,16 +352,18 @@ class Runner:
 
         # This sleeve's position on this symbol - another sleeve may hold the
         # same symbol, possibly the other way, and that is not ours to touch.
-        held = next((p for p in state.positions
-                     if p.symbol == symbol and sleeve_of(p) == sleeve_name), None)
+        held_all = [p for p in state.positions if p.symbol == symbol and sleeve_of(p) == sleeve_name]
+        held = held_all[0] if held_all else None
         intent = strategy.evaluate(df, len(df) - 1, held)
 
         if intent.flat:
-            if held is not None:
-                self.journal.write("exit_signal", symbol=symbol, ticket=held.ticket)
-                self.worker.close_ticket(held.ticket)
+            for p in held_all:
+                self.journal.write("exit_signal", symbol=symbol, ticket=p.ticket)
+                self.worker.close_ticket(p.ticket)
             return
         if held is not None and held.side is intent.side:
+            if strategy.rebalances:
+                self._rebalance(sleeve_name, symbol, strategy, intent, held_all, state, now, last_ts)
             return
 
         signal = Signal(
@@ -376,6 +388,60 @@ class Runner:
 
         cid = client_id(strategy.name, symbol, intent.side.name, last_ts)
         self.worker.submit(decision.order, cid)
+
+    def _rebalance(self, sleeve_name: str, symbol: str, strategy: Strategy, intent,
+                   held: list[Position], state, now: datetime, last_ts) -> None:
+        """A continuous strategy re-proposed its view on a position it holds.
+
+        On a hedging venue several tickets can make up one leg; they are judged
+        as one position and acted on newest-first. The decision itself is the
+        risk engine's, exactly as in the backtester.
+        """
+        volume = sum(p.volume for p in held)
+        average = sum(p.entry_price * p.volume for p in held) / volume
+        side = held[0].side
+        stops = [p.stop_loss for p in held if p.stop_loss is not None]
+        # the loosest stop is the one that defines the risk on the table
+        loosest = (min(stops) if side is Side.BUY else max(stops)) if stops else None
+        whole = Position(
+            symbol=symbol, side=side, volume=volume, entry_price=average, opened_at=held[0].opened_at,
+            stop_loss=loosest, ticket=held[0].ticket, comment=held[0].comment,
+        )
+        signal = Signal(
+            symbol=symbol, side=intent.side, stop_distance=intent.stop_distance,
+            confidence=intent.confidence, strategy=strategy.name, ts=now,
+        )
+        decision = self.risk.resize(signal, state, whole, inertia=strategy.inertia)
+        self.journal.write(
+            "resize", symbol=symbol, sleeve=sleeve_name, action=decision.action, held=volume,
+            target=decision.target_volume, delta=decision.delta, stop=decision.stop_loss,
+            note=decision.note, breaches=[b.limit for b in decision.breaches],
+        )
+
+        if decision.stop_loss is not None:
+            for p in held:
+                looser = p.stop_loss is None or (
+                    decision.stop_loss > p.stop_loss if side is Side.BUY else decision.stop_loss < p.stop_loss
+                )
+                if looser:
+                    self.worker.modify_stop(p.ticket, decision.stop_loss)
+
+        if decision.action == "reduce":
+            remaining = -decision.delta
+            for p in sorted(held, key=lambda p: p.opened_at, reverse=True):
+                if remaining <= 1e-9:
+                    break
+                take = min(p.volume, remaining)
+                self.worker.close_ticket(p.ticket, None if take >= p.volume - 1e-9 else take)
+                remaining -= take
+        elif decision.action == "increase":
+            if self.kill.engaged():
+                self.journal.write("submit_aborted", symbol=symbol, reason="kill switch")
+                return
+            # Its own client id: the OMS adopts by exact id, and the entry's id
+            # would make it adopt the position it is meant to add to.
+            cid = client_id(strategy.name, symbol, f"{intent.side.name}_ADD", last_ts)
+            self.worker.submit(decision.order, cid)
 
     # ------------------------------------------------------------------ helpers
 

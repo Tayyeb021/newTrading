@@ -435,7 +435,9 @@ python research/cot_screen.py                                      # positioning
 set DATABENTO_API_KEY=db-...
 python scripts/download_databento.py --dry-run --universe full     # Databento's own cost estimate, spends nothing
 python scripts/download_databento.py --universe full               # daily bars, every expiry, since 2010
-python scripts/backtest_futures.py --universe full --equity 2000000 --size-as full --lookbacks 20 60 120
+python scripts/backtest_futures.py --universe full --equity 2000000 --size-as full --lookbacks 20 60 120               # 007
+python scripts/backtest_futures.py --universe full --equity 10000000 --size-as full --continuous --lookbacks 20 60 120 # 008
+python scripts/backtest_futures.py --universe full --equity 10000000 --size-as full --sleeves trend carry              # 009
 python scripts/verify_roundtrip_ib.py                              # against TWS paper (port 7497), dry run
 ```
 
@@ -454,6 +456,19 @@ be held to expiry. Physically delivered ones — grains, metals, cattle, treasur
 — send delivery notices from first-notice day, which falls *before* last trade.
 The calendar anchors the roll on whichever comes first. The original ZN entry
 rolled off last trade and would have carried a long past first position day.
+
+**Continuous positions (008) and carry (009).** `--continuous` makes the trend
+sleeves size by trend strength — the lookback return in units of the volatility
+expected over that horizon — and resize open positions through
+`RiskEngine.resize`: the stop only ratchets tighter, the target is sized from the
+real distance to that stop, a reduction is a partial close that needs no
+approval, an increase is new risk that passes every limit without counting as a
+new position, and nothing trades inside a 25% inertia band. The live runner does
+the same through the worker (partial closes, adds under their own client id,
+stop modifications). `--sleeves trend carry` adds the carry sleeve, which reads
+the curve's annualised roll yield off the `carry` column the stitcher now writes
+on every continuous bar. Both are pre-registered in the research log with
+thresholds fixed before any data, and both run end to end on synthetic curves.
 
 Two rules the futures side adds. **A symbol is a root, not a contract**: the
 strategy says `MES`, the adapter resolves the live month and rolls before

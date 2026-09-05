@@ -24,7 +24,7 @@ diversification you are counting on is not there.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 import numpy as np
@@ -72,6 +72,9 @@ class PortfolioResult:
     halted_at: datetime | None = None
     evaluations_failed: int = 0
     weights: dict[str, float] = field(default_factory=dict)
+    #: Partial closes and adds made by continuous strategies. Each is a fill
+    #: that pays a spread, which is why position inertia exists.
+    rebalances: int = 0
 
     @property
     def final_equity(self) -> float:
@@ -205,7 +208,11 @@ class PortfolioBacktester:
             fill = self._fill(leg, open_price, leg.position.side.opposite(), ts)
             equity = self._close(leg, fill, ts, "signal_exit", equity, result, open_price)
 
-        if intent.flat or leg.position is not None:
+        if intent.flat:
+            return equity
+        if leg.position is not None:
+            if leg.strategy.rebalances:
+                return self._resize(leg, legs, intent, row, ts, equity, result)
             return equity
 
         others = [l.position for l in legs if l is not leg and l.position is not None]
@@ -246,6 +253,91 @@ class PortfolioBacktester:
         leg.entry_ts, leg.stop_price = ts, stop
         leg.risk_cash = leg.spec.risk_for(volume, intent.stop_distance)
         leg.exc_hi = leg.exc_lo = 0.0
+        return equity
+
+    def _resize(self, leg: Leg, legs: list[Leg], intent: Intent, row, ts, equity, result) -> float:
+        """A continuous strategy re-proposed its view on a position it holds.
+
+        The decision is the risk engine's (`RiskEngine.resize`): ratchet the
+        stop, size the target from the real distance to it, hold inside the
+        inertia band, reduce freely, increase only through the limits.
+        """
+        pos = leg.position
+        open_price = float(row["open"])
+        everyone = [l.position for l in legs if l.position is not None]
+        state = self.risk.snapshot(
+            equity=equity, balance=equity, margin_level=float("inf"),
+            positions=everyone, now=ts, current_price={leg.symbol: open_price},
+        )
+        signal = Signal(
+            symbol=leg.symbol, side=intent.side, stop_distance=intent.stop_distance,
+            confidence=intent.confidence, strategy=leg.strategy.name, ts=ts,
+        )
+        decision = self.risk.resize(
+            signal, state, pos, inertia=leg.strategy.inertia, risk_fraction=leg.sleeve.risk_per_trade,
+        )
+
+        # The stop only ever tightens; apply it whatever else happens.
+        if decision.stop_loss is not None and decision.stop_loss != leg.stop_price:
+            leg.stop_price = decision.stop_loss
+            leg.position = pos = replace(pos, stop_loss=decision.stop_loss)
+
+        if decision.action == "hold":
+            return equity
+        if decision.action == "refused":
+            key = decision.breaches[0].limit if decision.breaches else decision.note.split(":")[0]
+            result.rejections[key] = result.rejections.get(key, 0) + 1
+            return equity
+        if decision.action == "reduce":
+            fill = self._fill(leg, open_price, pos.side.opposite(), ts)
+            return self._partial_close(leg, -decision.delta, fill, open_price, ts, equity, result)
+
+        # increase: a second fill at this open, averaged into the position
+        delta = decision.delta
+        fill = self._fill(leg, open_price, pos.side, ts)
+        commission = self.costs.commission(leg.symbol, delta)
+        equity -= commission
+        leg.entry_cost += commission + self._fill_cost_cash(leg, open_price, fill, delta)
+        new_volume = pos.volume + delta
+        average = (pos.entry_price * pos.volume + fill * delta) / new_volume
+        leg.position = replace(pos, volume=new_volume, entry_price=average)
+        leg.risk_cash += leg.spec.risk_for(delta, abs(fill - leg.stop_price))
+        result.rebalances += 1
+        return equity
+
+    def _partial_close(self, leg: Leg, closing: float, fill: float, reference: float,
+                       ts, equity, result) -> float:
+        """Close part of a position. Books the closed slice as its own trade so
+        attribution stays exact; the remainder keeps its entry price and its
+        share of the entry costs. Swap on lots added later is charged from the
+        original entry, which overstates it slightly on CFDs and not at all on
+        futures, where there is none."""
+        pos = leg.position
+        before = pos.volume
+        fraction = closing / before
+        gross = (fill - pos.entry_price) * pos.side.sign * closing * leg.spec.value_per_price_unit
+        commission = self.costs.commission(leg.symbol, closing)
+        swap = self.costs.swap_cash(
+            leg.symbol, closing, leg.entry_ts, ts,
+            is_long=pos.side is Side.BUY, spec=leg.spec, price=pos.entry_price,
+        )
+        equity += gross - commission - swap
+        friction = commission + swap + self._fill_cost_cash(leg, reference, fill, closing)
+        entry_share = leg.entry_cost * fraction
+        leg.entry_cost -= entry_share
+
+        trade = Trade(
+            symbol=pos.symbol, strategy=leg.strategy.name, side=pos.side, volume=closing,
+            entry_ts=leg.entry_ts, entry_price=pos.entry_price, exit_ts=ts, exit_price=fill,
+            stop_price=leg.stop_price, exit_reason="rebalance", gross_pnl=gross,
+            costs=entry_share + friction, mae=leg.exc_lo, mfe=leg.exc_hi,
+            risk_cash=leg.risk_cash * fraction, sleeve=leg.sleeve.name,
+        )
+        result.trades.append(trade)
+        leg.cum_pnl += trade.net_pnl
+        leg.risk_cash *= 1.0 - fraction
+        leg.position = replace(pos, volume=before - closing)
+        result.rebalances += 1
         return equity
 
     def _fill(self, leg: Leg, reference: float, side: Side, ts) -> float:
@@ -387,6 +479,11 @@ def portfolio_report(result: PortfolioResult) -> str:
     if result.halted_at:
         L.append(f"  ! halted {result.halted_at:%Y-%m-%d}"
                  + (f", evaluation failed {result.evaluations_failed}x" if result.evaluations_failed else ""))
+
+    gross = sum(t.gross_pnl for t in result.trades)
+    friction = sum(t.costs for t in result.trades)
+    drag = f"{friction / abs(gross):.1%} of gross" if gross else "n/a"
+    L.append(f"  rebalances {result.rebalances}   friction {friction:,.0f} ({drag})")
 
     att = attribution(result)
     L.append("")

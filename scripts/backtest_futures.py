@@ -54,6 +54,7 @@ from core.contracts import ALL_ROOTS, FULL_UNIVERSE, MICRO_UNIVERSE, FuturesRoot
 from core.sleeve import Sleeve  # noqa: E402
 from data.continuous import annual_roll_drag, roll_cost_cash, stitch  # noqa: E402
 from risk.build import build_engine  # noqa: E402
+from strategies.carry import Carry  # noqa: E402
 from strategies.trend import TrendFollowing  # noqa: E402
 
 # Price levels for the synthetic run only, in each contract's quote unit.
@@ -104,6 +105,10 @@ def main() -> int:
     ap.add_argument("--universe", choices=["micro", "full"], default=None)
     ap.add_argument("--size-as", choices=["micro", "full"], default="micro")
     ap.add_argument("--lookbacks", nargs="+", type=int, default=[60])
+    ap.add_argument("--sleeves", nargs="+", choices=["trend", "carry"], default=["trend"],
+                    help="trend (007/008) and/or carry (009)")
+    ap.add_argument("--continuous", action="store_true",
+                    help="trend sleeves resize toward a forecast-scaled target (008)")
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--data", default="data/futures")
     ap.add_argument("--since", type=int, default=2011)
@@ -142,10 +147,17 @@ def main() -> int:
               f"{len(rolls):>3} rolls, term drag {annual_roll_drag(rolls, droot, yrs):+.3f}/yr, "
               f"roll friction {roll_cost_cash(troot, 1):.2f}/contract")
 
-    sleeves = [
-        Sleeve(f"trend{lb}", (lambda s, lb=lb: TrendFollowing(lookback=lb, ema_period=lb)), tuple(names), timeframe="D1")
-        for lb in args.lookbacks
-    ]
+    sleeves = []
+    if "trend" in args.sleeves:
+        prefix = "ctrend" if args.continuous else "trend"
+        for lb in args.lookbacks:
+            sleeves.append(Sleeve(
+                f"{prefix}{lb}",
+                (lambda s, lb=lb: TrendFollowing(lookback=lb, ema_period=lb, continuous=args.continuous)),
+                tuple(names), timeframe="D1",
+            ))
+    if "carry" in args.sleeves:
+        sleeves.append(Sleeve("carry", lambda s: Carry(), tuple(names), timeframe="D1"))
     costs = CostModel.for_futures(trade)
     profile = RiskProfile.load(args.profile)
     if args.max_positions is not None:

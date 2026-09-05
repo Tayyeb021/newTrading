@@ -70,14 +70,15 @@ def stitch(
         lo = w.active_from
         hi = w.roll_on
         piece = f[(f["day"] >= lo) & (f["day"] < hi)] if i < len(windows) - 1 else f[f["day"] >= lo]
-        piece = piece.assign(contract=root.code(w.year, w.month))
-        pieces.append(piece)
+        piece = piece.assign(contract=root.code(w.year, w.month), carry=float("nan"))
 
         if i < len(windows) - 1:
             nxt = windows[i + 1]
             g = frames[(nxt.year, nxt.month)]
+            piece["carry"] = _carry(piece, g, w.last_trade, nxt.last_trade)
             gap, fc, nc = _gap_on(f, g, hi)
             rolls.append(Roll(hi, root.code(w.year, w.month), root.code(nxt.year, nxt.month), gap, fc, nc))
+        pieces.append(piece)
 
     # Back-adjust: walk rolls newest -> oldest, accumulating the shift.
     shift = 0.0
@@ -99,6 +100,26 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
     f["ts"] = pd.to_datetime(f["ts"], utc=True)
     f["day"] = f["ts"].dt.date
     return f.sort_values("ts").reset_index(drop=True)
+
+
+def _carry(front: pd.DataFrame, nxt: pd.DataFrame, front_expiry: date, next_expiry: date):
+    """Annualised roll yield of holding the front against the next contract,
+    measured on every day both printed:
+
+        (front - next) / front * 365 / days between the two expiries
+
+    Positive is backwardation, which pays a long as the contract rolls up the
+    curve toward spot; negative is contango, which pays a short. This is the
+    carry signal of Koijen, Moskowitz, Pedersen and Vrugt, read straight off
+    the curve, and it is not affected by the back-adjustment because it is
+    taken from the raw closes before any shift. Forward-filled across days the
+    next contract did not print; NaN before it first did.
+    """
+    days = max((next_expiry - front_expiry).days, 1)
+    next_close = nxt.groupby("day")["close"].last()
+    matched = front["day"].map(next_close)
+    carry = (front["close"] - matched) / front["close"] * (365.0 / days)
+    return carry.ffill().to_numpy()
 
 
 def _gap_on(front: pd.DataFrame, nxt: pd.DataFrame, roll_day: date) -> tuple[float, float, float]:

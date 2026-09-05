@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
-from core.types import OrderRequest, Position, Signal, SymbolSpec
+from core.types import OrderRequest, Position, Side, Signal, SymbolSpec
 from risk.limits import (
     Breach,
     Limit,
@@ -68,6 +68,29 @@ _SEVERITY_ORDER = {
     Severity.HALT: 2,
     Severity.FLATTEN: 3,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ResizeDecision:
+    """What to do with an OPEN position whose strategy re-proposed its view.
+
+    `action` is one of:
+      hold      target within inertia of what is held, or unsizeable: keep it
+      reduce    partial close of |delta| lots; a reduction never needs approval
+      increase  `order` adds `delta` lots and has passed every limit
+      refused   an increase that a limit rejected; hold what is held
+    `stop_loss` is the ratcheted stop for the whole position. It only ever
+    tightens, and it applies whatever the action is.
+    """
+
+    action: str
+    target_volume: float
+    delta: float
+    stop_loss: float | None
+    order: OrderRequest | None = None
+    size: SizeResult | None = None
+    breaches: tuple[Breach, ...] = ()
+    note: str = ""
 
 
 @dataclass
@@ -257,6 +280,99 @@ class RiskEngine:
             intent=f"{signal.strategy}:{signal.side.name}",
         )
         return RiskDecision(True, order, size, ())
+
+    def resize(
+        self,
+        signal: Signal,
+        state: RiskState,
+        position: Position,
+        *,
+        inertia: float = 0.25,
+        regime_scalar: float = 1.0,
+        max_volume: float | None = None,
+        risk_fraction: float | None = None,
+    ) -> ResizeDecision:
+        """Re-size an open position toward what the strategy now wants.
+
+        Same sizing formula as a fresh entry, with two differences that keep the
+        risk honest. The stop only ratchets tighter, so a position's risk can
+        fall but never silently rise. And the size is taken from the distance to
+        THAT stop, not the strategy's proposed one: after a favourable move the
+        ratcheted stop sits closer than a fresh 2.5 ATR would, and that is the
+        real risk on the table.
+
+        A reduction is a partial close and is always allowed. An increase is new
+        risk: it is sized as the increment, marked as an increase so position
+        counts ignore it, and put through every limit like any other order.
+        """
+        hold = position.volume
+        spec = self.specs.get(signal.symbol)
+        if spec is None:
+            return ResizeDecision("hold", hold, 0.0, position.stop_loss, note=f"no spec loaded for {signal.symbol}")
+        if signal.side is not position.side:
+            return ResizeDecision("hold", hold, 0.0, position.stop_loss, note="side differs; that is an exit, not a resize")
+        price = state.current_price.get(signal.symbol)
+        if price is None:
+            return ResizeDecision("hold", hold, 0.0, position.stop_loss, note=f"no current price for {signal.symbol}")
+
+        proposed = spec.normalize_price(self._stop_price(signal, price))
+        current = position.stop_loss
+        if current is None:
+            stop = proposed
+        elif position.side is Side.BUY:
+            stop = max(current, proposed)
+        else:
+            stop = min(current, proposed)
+        distance = abs(price - stop)
+        if distance <= 0:
+            return ResizeDecision("hold", hold, 0.0, current, note="price is at or through the stop; leave it to the stop")
+
+        size = size_position(
+            spec,
+            equity=state.equity,
+            risk_fraction=risk_fraction if risk_fraction is not None else self.risk_per_trade,
+            stop_distance=distance,
+            regime_scalar=regime_scalar,
+            confidence=signal.confidence,
+            max_volume=max_volume,
+        )
+        if not size.tradeable:
+            # The target cannot be expressed in whole lots. Sizing up to reach a
+            # minimum is forbidden, and closing a position the strategy still
+            # wants is not a risk decision - so hold, and say why.
+            return ResizeDecision("hold", hold, 0.0, stop, size=size, note=f"target unsizeable: {size.reason}")
+
+        target = size.volume
+        raw_delta = target - hold
+        if abs(raw_delta) < inertia * hold or spec.round_volume(abs(raw_delta)) < spec.volume_step:
+            return ResizeDecision("hold", target, 0.0, stop, size=size, note="within inertia")
+        delta = spec.round_volume(abs(raw_delta)) * (1.0 if raw_delta > 0 else -1.0)
+
+        if delta < 0:
+            return ResizeDecision("reduce", target, delta, stop, size=size,
+                                  note=f"reduce {-delta:g} lots toward {target:g}")
+
+        blocking = tuple(b for b in self.check_account(state) if b.severity in _ACTIONABLE)
+        if blocking:
+            return ResizeDecision("refused", target, 0.0, stop, size=size, breaches=blocking,
+                                  note="account-level limit engaged")
+
+        risk_cash = spec.risk_for(delta, distance)
+        trade = ProposedTrade(
+            symbol=signal.symbol, volume=delta, risk_cash=risk_cash,
+            risk_fraction=risk_cash / state.equity, strategy=signal.strategy,
+            existing_volume=hold, total_risk_fraction=spec.risk_for(target, distance) / state.equity,
+        )
+        breaches = tuple(b for lim in self.limits if (b := lim.check(state, trade)) is not None)
+        if breaches:
+            return ResizeDecision("refused", target, 0.0, stop, size=size, breaches=breaches,
+                                  note="trade-level limit")
+        order = OrderRequest(
+            symbol=signal.symbol, side=signal.side, volume=delta, stop_loss=stop,
+            comment=signal.strategy[:31], intent=f"{signal.strategy}:{signal.side.name}:add",
+        )
+        return ResizeDecision("increase", target, delta, stop, order=order, size=size,
+                              note=f"add {delta:g} lots toward {target:g}")
 
     # ---------------------------------------------------------------- helpers
 

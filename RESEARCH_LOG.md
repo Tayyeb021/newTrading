@@ -316,3 +316,73 @@ ladder's equity levels, then a paper run on IB.
 What this cannot show: anything about intraday, anything about the CFD broker.
 It is the daily-bar, exchange-cleared version of the only idea left with
 evidence behind it.
+
+---
+
+## 008 — Continuous forecasts, volatility targeting, position inertia — **PRE-REGISTERED, awaiting data**
+
+*2026-09-05. Built and tested on synthetic data; runs the day 007's data lands.
+Thresholds declared here, before any result.*
+
+What changes and what does not. The direction rule of 007 is untouched. Two
+things change. First, the size of a position follows the strength of the
+trend: the lookback return in units of the volatility expected over that
+horizon, capped at 2σ for full size, floored at a quarter of full size so no
+dust position pays a full spread. Second, while the position is open the
+strategy re-proposes that size and a fresh 2.5-ATR stop every bar, and the
+risk engine (`RiskEngine.resize`) ratchets the stop tighter only, sizes the
+target from the real distance to that stop, holds inside a 25% inertia band,
+reduces freely, and puts an increase through every limit as new risk. The
+constants 2.0, 0.25 and 25% follow Carver's published practice and were not
+tuned on anything.
+
+Why it should help, per the literature: volatility scaling raises the Sharpe
+of time-series momentum and cuts its drawdowns (Moskowitz, Ooi & Pedersen
+2012; Baltas & Kosowski); continuous forecasts with inertia lower turnover,
+which is the cost line a small account feels most.
+
+Trials: the three speeds and their ensemble, continuous. **Four.** Running
+total 178.
+
+Pass thresholds, against 007's result on the same data, same costs, and an
+equity where the confidence floor never meets a minimum contract
+(`--equity 10000000 --size-as full`):
+
+1. Ensemble net Sharpe ≥ 007's ensemble net Sharpe − 0.05, at the 2× cost
+   stress. Not worse is the bar; better is the hope.
+2. Friction as a share of gross P&L ≤ 007's.
+3. Maximum drawdown ≤ 007's.
+4. Positive years ≥ 007's count − 1.
+
+Pass all four and continuous becomes the standing form of the trend sleeves.
+Fail any and 007's discrete form stands, and this entry records why.
+
+---
+
+## 009 — Carry from the futures curve — **PRE-REGISTERED, awaiting data**
+
+*2026-09-05. Built and tested on synthetic curves. Thresholds declared here.*
+
+The first signal in this log that is not a function of price history. Carry is
+read off the curve by the stitcher: (front − next) / front, annualised by the
+days between the two expiries, on every day both contracts print. Backwardation
+pays a long, contango pays a short (Koijen, Moskowitz, Pedersen & Vrugt 2018).
+The rule: smooth over 20 days, divide by the 252-day standard deviation of the
+market's own carry so a bond and a gas contract are judged on one scale, the
+sign is the side, the magnitude capped at 2 is the confidence, flat below 0.25,
+2.5-ATR stop. Continuous by construction. Constants fixed, not tuned.
+
+Trials: carry alone; carry with the trend ensemble (007's or 008's, whichever
+stands). **Two.** Running total 180.
+
+Pass thresholds:
+
+1. Carry alone: net Sharpe ≥ 0.30 at the 2× cost stress; positive in at least
+   60% of years; at least 5 of 7 sectors positive.
+2. Weekly return correlation between the carry sleeve and the trend ensemble
+   below 0.5. Otherwise it is trend wearing a second hat and adds nothing.
+3. Trend + carry: net Sharpe above the better of the two alone. The
+   diversification has to show up in the number, not in the story.
+
+Fail 1 and carry is dead here. Pass 1 and fail 2 or 3 and carry is reported
+real but redundant, which is also worth knowing.

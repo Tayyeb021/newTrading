@@ -20,15 +20,25 @@ ship this instead.
 Expect a low win rate near 35-40%, a long right tail, and multi-month flat
 stretches. A trend system that wins often is usually a trend system with a hidden
 look-ahead bug.
+
+**Continuous mode** (`continuous=True`, research entry 008) keeps the direction
+rule and changes only how much: the momentum is expressed in units of the
+volatility expected over the lookback — a t-statistic for the trend — and
+mapped to `confidence`, so a weak trend gets a small position and a strong one
+full size. While in a position the strategy re-proposes that confidence and a
+fresh ATR stop distance every bar; the engines resize toward the target through
+the risk engine, which also ratchets the stop tighter. The discrete baseline is
+untouched, which is what makes the two comparable.
 """
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
-from core.strategy import FLAT, Intent, Strategy
+from core.strategy import FLAT, Intent, Strategy, forecast_to_confidence
 from core.types import Position, Side
-from features.indicators import atr, ema, rolling_percentile, rolling_return
+from features.indicators import atr, ema, realized_vol, rolling_percentile, rolling_return
 
 
 class TrendFollowing(Strategy):
@@ -41,12 +51,17 @@ class TrendFollowing(Strategy):
         atr_period: int = 14,
         atr_stop_multiple: float = 2.5,
         vol_filter_percentile: float | None = 0.95,
+        continuous: bool = False,
+        forecast_cap: float = 2.0,
     ) -> None:
         self.lookback = lookback
         self.ema_period = ema_period
         self.atr_period = atr_period
         self.atr_stop_multiple = atr_stop_multiple
         self.vol_filter_percentile = vol_filter_percentile
+        self.continuous = continuous
+        self.forecast_cap = forecast_cap
+        self.rebalances = continuous
         self.warmup = max(lookback, ema_period, atr_period) + 5
 
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -55,6 +70,11 @@ class TrendFollowing(Strategy):
         df["mom"] = rolling_return(df["close"], self.lookback)
         if self.vol_filter_percentile is not None:
             df["atr_pct"] = rolling_percentile(df["atr"], 252)
+        # Trend strength: the lookback return over the volatility expected across
+        # that horizon. Comparable across a bond and a gas contract, which is what
+        # lets one cap serve the whole universe.
+        horizon_vol = realized_vol(df["close"], self.lookback) / np.sqrt(252.0) * np.sqrt(self.lookback)
+        df["forecast"] = df["mom"] / horizon_vol.replace(0.0, np.nan)
         return df
 
     def evaluate(self, df: pd.DataFrame, i: int, position: Position | None) -> Intent:
@@ -75,7 +95,7 @@ class TrendFollowing(Strategy):
             side = Side.SELL
         else:
             # No trend. Exit if held; the stop handles the rest.
-            return FLAT if position is not None else FLAT
+            return FLAT
 
         # Volatility filter. Opening a fresh trend position right after an
         # extreme move is how trend systems buy the exact top of a spike.
@@ -84,10 +104,18 @@ class TrendFollowing(Strategy):
             if pd.notna(pct) and pct > self.vol_filter_percentile:
                 return FLAT
 
+        confidence = 1.0
+        if self.continuous:
+            confidence = forecast_to_confidence(float(row["forecast"]), self.forecast_cap)
+            if confidence <= 0.0:
+                return FLAT
+
         return Intent(
             side=side,
             stop_distance=stop_distance,
-            reason=f"mom={mom:+.3f} close_vs_ema={close - ema_now:+.5f}",
+            confidence=confidence,
+            reason=f"mom={mom:+.3f} close_vs_ema={close - ema_now:+.5f}"
+                   + (f" f={row['forecast']:+.2f}" if self.continuous else ""),
         )
 
 

@@ -216,6 +216,12 @@ class Backtester:
             )
             position = None
 
+        if position is not None and not intent.flat and self.strategy.rebalances:
+            raise NotImplementedError(
+                f"{self.strategy.name} is a continuous strategy (rebalances=True); "
+                "run it through PortfolioBacktester, which implements resizing"
+            )
+
         if intent.flat or position is not None:
             return position, entry_ts, stop_price, risk_cash, equity
 

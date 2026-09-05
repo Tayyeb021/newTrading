@@ -35,6 +35,10 @@ class Roll:
     gap: float  # next.close - front.close on the roll date
     front_close: float
     next_close: float
+    #: False when the two contracts never traded on the same day (a thin
+    #: market in its early years): the gap is then set to zero, the series is
+    #: left unadjusted at that roll, and the caller is told.
+    measured: bool = True
 
 
 def stitch(
@@ -79,8 +83,8 @@ def stitch(
             nxt = windows[i + 1]
             g = frames[(nxt.year, nxt.month)]
             piece["carry"] = _carry(piece, g, w.last_trade, nxt.last_trade)
-            gap, fc, nc = _gap_on(f, g, hi)
-            rolls.append(Roll(hi, root.code(w.year, w.month), root.code(nxt.year, nxt.month), gap, fc, nc))
+            gap, fc, nc, measured = _gap_on(f, g, hi)
+            rolls.append(Roll(hi, root.code(w.year, w.month), root.code(nxt.year, nxt.month), gap, fc, nc, measured))
         pieces.append(piece)
 
     # Back-adjust: walk rolls newest -> oldest, accumulating the shift.
@@ -125,16 +129,26 @@ def _carry(front: pd.DataFrame, nxt: pd.DataFrame, front_expiry: date, next_expi
     return carry.ffill().to_numpy()
 
 
-def _gap_on(front: pd.DataFrame, nxt: pd.DataFrame, roll_day: date) -> tuple[float, float, float]:
-    """Close-to-close gap on the last day both contracts traded before the roll."""
+def _gap_on(front: pd.DataFrame, nxt: pd.DataFrame, roll_day: date) -> tuple[float, float, float, bool]:
+    """Close-to-close gap on the last day both contracts traded before the roll.
+
+    If the two never traded on the same day - the Brazilian real in 2011 listed
+    each month only after the previous one expired - there is nothing to
+    measure. The gap is reported as zero and flagged unmeasured: the series
+    then carries the true price change across the hole plus whatever the term
+    structure was, unadjusted. That is a small error in a thin market's early
+    history; refusing the market outright was the alternative.
+    """
     common = sorted(set(front["day"]) & set(nxt["day"]))
     candidates = [d for d in common if d < roll_day] or common
     if not candidates:
-        raise ValueError(f"no overlapping session to measure the roll gap before {roll_day}")
+        fc = float(front["close"].iloc[-1])
+        nc = float(nxt["close"].iloc[0])
+        return 0.0, fc, nc, False
     d = candidates[-1]
     fc = float(front.loc[front["day"] == d, "close"].iloc[-1])
     nc = float(nxt.loc[nxt["day"] == d, "close"].iloc[-1])
-    return nc - fc, fc, nc
+    return nc - fc, fc, nc, True
 
 
 def roll_cost_cash(root: FuturesRoot, contracts: float, spread_ticks: float = 1.0) -> float:

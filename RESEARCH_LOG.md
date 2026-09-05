@@ -653,3 +653,111 @@ retail costs, on 15 years of the exchange's own data. The best net Sharpe
 across all of it is 0.31. The declared bar is 0.40. The gap is not a bug in
 this machine; it is the record of these fifteen years at these costs, and
 the industry's own index says the same. Trials: 192.
+
+---
+
+## 012 — Breadth: the same rules on 46 markets — **PRE-REGISTERED, declared before running**
+
+*2026-09-05. Declared after 011's verdict and before any 012 number exists.*
+
+The single largest lever the evidence names, and the one this log has not
+pulled: markets. Man Group's diversification benefit keeps rising past 30
+markets; the industry runs 100 to 300. ICE and Eurex were priced first and
+are closed to this account - ICE daily history needs a licence the plan does
+not carry, Eurex only starts in March 2025 - so the widening is within CME
+Group: thirteen more distinct markets with the same 2010 start and no
+licence, for $2.85 of credit. Specs and expirations were read from the
+exchange's definitions, every rule is tested against them, and the parser's
+lessons from 007 carry over.
+
+**Added:** Brent (CME's contract), palladium, Mexican peso, South African
+rand, Brazilian real, Nikkei 225, S&P MidCap 400, oats, rough rice,
+three-month SOFR, fed funds, the ultra 10-year, and bitcoin (from December
+2017). Three new sectors: emerging FX, Asian indices, crypto. Universe 33 → 46,
+sectors 7 → 10. Bitcoin is one market with its own sector on purpose: it is
+the only one whose history is short, and its sector cap keeps it from
+dominating a monthly book.
+
+**Design.** The 010 forms, unchanged - monthly TSMOM 60/120/250 and their
+ensemble, carry in risk units - run on the wide universe, judged against
+their own 33-market results on the same window, same costs, same equity.
+Nothing about the rules moves. The wide book's capacity constraints are the
+research profile's, already wide enough for 4 sleeves × 46 markets.
+
+**Trials:** trend ensemble wide, carry wide, both wide. Three. Running total 195.
+
+**Pass thresholds:**
+
+1. Measured diversification ratio of the wide trend book ≥ the core book's.
+   If more markets do not diversify, the argument for breadth is wrong here.
+2. Wide trend ensemble net Sharpe ≥ core's + 0.05 at 2x costs.
+3. Wide trend ensemble max drawdown ≤ core's.
+4. Wide trend + carry net Sharpe > the better of the two wide books alone,
+   with carry-trend correlation < 0.5 (the 009/010 combination rule).
+5. The family bar, 0.40 net Sharpe, reported alongside; it remains the bar
+   for calling anything tradeable.
+
+Fail 1 or 2 and breadth within CME is exhausted as a lever on this data, and
+the honest next step is a vendor with ICE and Eurex history (Norgate, $270 a
+year, 100 markets to 1980), which is the user's money and the user's call.
+
+---
+
+## 012 — VERDICT: **breadth helps, and not enough. DEAD as declared.**
+
+*2026-09-05, 46 markets against the 33 of 007-011, same rules, same window,
+same $20M and 2x cost stress. `state/gauntlet_010_wide.json`,
+`gauntlet_010c_wide.json`, `gauntlet_010c_with_trend_wide.json`, `gauntlet_012.json`.*
+
+| | core 33 | **wide 46** |
+|---|---|---|
+| trend ensemble net Sharpe | 0.28 | **0.31** |
+| trend max drawdown | 47% | 53% |
+| trend PBO across speeds | 0.00 | 0.14 |
+| trend last five years Sharpe | +0.43 | +0.41 |
+| positive sectors | 4 / 7 | 7 / 10 |
+| 250-day speed alone, net | +19.1M | +22.2M |
+| carry alone net Sharpe | 0.21 | 0.07 |
+| trend + carry net Sharpe | 0.31 | **0.32**, correlation 0.22 |
+| diversification ratio (sleeves) | 1.15 | 1.16 |
+
+Thresholds: 1 passes by a hundredth, 2 fails (0.31 against a required 0.33),
+3 fails (the drawdown grew), 4 passes (0.32 beats 0.31 at correlation 0.22),
+5 fails. Dead as declared.
+
+### Reading it
+
+- **Thirteen more markets bought three hundredths of Sharpe.** The
+  arithmetic of breadth needs independent markets; the additions are
+  mostly siblings of what was there (a second oil, a second treasury, two
+  more grains, a MidCap beside the S&P), and the pairwise correlation of
+  the book barely moved. The exceptions earned their place: emerging FX,
+  the Nikkei and bitcoin were all positive under trend, and every one of
+  the ten sectors but grains, energy and FX made money.
+- **Carry got worse, and the log says why without being allowed to act on
+  it.** The two short-rate contracts, SOFR and fed funds, lost $8.1M under
+  the carry rule. A short-rate curve prices the expected policy path, not a
+  risk premium; the literature treats it as a different asset. Removing
+  them now would be a post-hoc choice, so they stay in the verdict and are
+  noted here for the next pre-registration.
+- **Capacity.** The research profile was widened once more during this
+  entry (200 positions, 92% open risk at the stops) because the first wide
+  run refused 2,800 signals on capacity; recorded, as the 007 widening was.
+  The four-sleeve combination still met the 15% sector cap in grains and
+  rates (about a thousand refusals of some five thousand decisions), which
+  is a declared design limit and is left in place.
+- **The 250-day speed** again carries the book: +$22M alone across 46
+  markets, +0.28R expectancy, the speed ranking stable across every split
+  (PBO 0.14). Same caveat as 010: not declared as the choice, not licensed
+  by this data.
+
+### What this closes
+
+Breadth within CME Group is now exhausted as a lever: every distinct,
+licence-free market with a 2010 start is in. The next hundred markets live
+on ICE and Eurex, whose history this account cannot buy under its plan
+(ICE needs a licence, Eurex only starts in 2025). A vendor with both back
+to 1980 exists at $270 a year (Norgate, ~100 markets, 11 exchanges); that is
+the user's money and the user's call, and the honest expectation from this
+entry is that doubling the market count again would add tenths of Sharpe,
+not halves. Trials: 195.

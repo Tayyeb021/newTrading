@@ -35,8 +35,8 @@ limits:
   # these at 40 / 0.15 / 0.04 and refused 173,000 signals on budget grounds, so
   # it measured a first-come-first-served subset, not the signal. Widened before
   # any result was read as a result; the numbers from that run are in the log.
-  max_concurrent_positions: 120
-  max_open_risk: 0.60
+  max_concurrent_positions: 200 # 4 sleeves x 46 markets = 184 legs
+  max_open_risk: 0.92 # 184 legs x 0.5% at the stops; capacity must never be the binding constraint of a signal test
   max_bucket_risk: 0.15 # 7 markets x 3 sleeves x 0.5% = 10.5%; room for a fourth sleeve
   consecutive_losses: 100 # effectively off; a trend book loses six in a row routinely
   consecutive_loss_pause_hours: 1
@@ -47,10 +47,13 @@ limits:
 # One budget per sector. Both the full-size research root and its micro are
 # listed so a book sized as micros lands in the same bucket.
 buckets:
-  us_indices: [ES, NQ, YM, RTY, MES, MNQ, MYM, M2K, US30, US500, NAS100]
-  rates: [ZT, ZF, ZN, ZB, UB]
+  us_indices: [ES, NQ, YM, RTY, EMD, MES, MNQ, MYM, M2K, US30, US500, NAS100]
+  asia_indices: [NKD]
+  rates: [ZT, ZF, ZN, ZB, UB, TN, SR3, ZQ]
   usd_majors: [6E, 6J, 6B, 6A, 6C, 6S, 6N, M6E, M6A, M6B, EURUSD, GBPUSD, AUDUSD, NZDUSD, USDJPY]
-  metals: [GC, SI, HG, PL, MGC, SIL, MHG, XAUUSD, XAGUSD]
-  energy: [CL, NG, RB, HO, MCL]
-  grains: [ZC, ZS, ZW, KE, ZM, ZL]
+  em_fx: [6M, 6Z, 6L]
+  metals: [GC, SI, HG, PL, PA, MGC, SIL, MHG, XAUUSD, XAGUSD]
+  energy: [CL, NG, RB, HO, BZ, MCL]
+  grains: [ZC, ZS, ZW, KE, ZM, ZL, ZO, ZR]
   meats: [LE, HE, GF]
+  crypto: [BTC, MBT]

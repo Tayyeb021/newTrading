@@ -36,7 +36,7 @@ from backtest.portfolio import (  # noqa: E402
 )
 from backtest_futures import load_expiries  # noqa: E402
 from core.config import RiskProfile  # noqa: E402
-from core.contracts import FULL_UNIVERSE, data_root, tradeable  # noqa: E402
+from core.contracts import CORE_UNIVERSE, FULL_UNIVERSE, data_root, tradeable  # noqa: E402
 from core.sleeve import Sleeve  # noqa: E402
 from data.continuous import stitch  # noqa: E402
 from ml.stats import deflated_sharpe, probability_of_backtest_overfitting, sharpe  # noqa: E402
@@ -49,15 +49,18 @@ from strategies.tsmom import TSMOM  # noqa: E402
 TRIALS_SO_FAR = 192  # RESEARCH_LOG running total after 011 was declared
 
 
-def load_universe(since: int, folder: Path, size_as: str):
+def load_universe(since: int, folder: Path, size_as: str, names=None):
     start, end = date(since, 1, 1), date.today()
     bars, specs, trade = {}, {}, {}
-    for name in FULL_UNIVERSE:
+    for name in (names or FULL_UNIVERSE):
         droot = data_root(name)
         exp = load_expiries(name, folder)
         if not exp:
             raise SystemExit(f"{name}: no expiry data under {folder}")
-        cont, _ = stitch(droot, exp, start=start, end=end)
+        cont, rolls = stitch(droot, exp, start=start, end=end)
+        unmeasured = sum(1 for r in rolls if not r.measured)
+        if unmeasured:
+            print(f"  {name}: {unmeasured} of {len(rolls)} rolls unmeasured (no overlapping session); left unadjusted")
         bars[name] = cont
         troot = tradeable(name) if size_as == "micro" else droot
         trade[name] = troot
@@ -217,11 +220,45 @@ def verdict_009(m: dict, combined: dict | None, trend: dict | None) -> list[tupl
     return rows
 
 
+def verdict_012(state: Path) -> list[tuple[str, bool, str]]:
+    """Breadth: the wide books against the core books, all from saved runs."""
+    def load(name):
+        p = state / f"{name}.json"
+        if not p.exists():
+            raise SystemExit(f"missing {p}; run the core and wide 010 / 010c / 010c --with-trend entries first")
+        return json.loads(p.read_text())
+
+    core_t, wide_t = load("gauntlet_010")["book"], load("gauntlet_010_wide")["book"]
+    core_c, wide_c = load("gauntlet_010c")["carry"], load("gauntlet_010c_wide")["carry"]
+    both = load("gauntlet_010c_with_trend_wide")
+    wide_both = both["trend_plus_carry"]
+    corr = wide_both["sleeve_correlation"]
+    carry_name = next((k for k in corr if "carry" in k), None)
+    rho = max(v for k, v in corr[carry_name].items() if k != carry_name) if carry_name else None
+    best_alone = max(wide_t["net_sharpe"], wide_c["net_sharpe"])
+    return [
+        ("1. wide trend diversification ratio >= core's",
+         wide_t["diversification_ratio"] >= core_t["diversification_ratio"] - 1e-9,
+         f"{wide_t['diversification_ratio']:.2f} vs {core_t['diversification_ratio']:.2f}"),
+        ("2. wide trend net Sharpe >= core's + 0.05", wide_t["net_sharpe"] >= core_t["net_sharpe"] + 0.05,
+         f"{wide_t['net_sharpe']:.2f} vs {core_t['net_sharpe']:.2f}"),
+        ("3. wide trend max drawdown <= core's", wide_t["max_drawdown"] <= core_t["max_drawdown"],
+         f"{wide_t['max_drawdown']:.1%} vs {core_t['max_drawdown']:.1%}"),
+        ("4. wide trend + carry > better alone, correlation < 0.5",
+         wide_both["net_sharpe"] > best_alone and rho is not None and rho < 0.5,
+         f"{wide_both['net_sharpe']:.2f} vs {best_alone:.2f}, rho {rho}"),
+        ("5. family bar, for the record: wide trend net Sharpe >= 0.40", wide_t["net_sharpe"] >= 0.40,
+         f"{wide_t['net_sharpe']:.2f}"),
+        ("carry, for the record: wide vs core net Sharpe", wide_c["net_sharpe"] >= core_c["net_sharpe"],
+         f"{wide_c['net_sharpe']:.2f} vs {core_c['net_sharpe']:.2f}"),
+    ]
+
+
 def run_book(bars, specs, trade, sleeves, equity, profile_name, stress, target_vol: float | None = None):
     profile = RiskProfile.load(profile_name)
     engine = build_engine(profile, equity, specs, sleeves)
     costs = CostModel.for_futures(trade).stressed(stress)
-    names = list(FULL_UNIVERSE)
+    names = list(bars)
     allocator = None
     if target_vol is not None:
         allocator = VolTarget(target_annual_vol=target_vol, max_risk_fraction=profile.max_risk_per_trade)
@@ -231,9 +268,10 @@ def run_book(bars, specs, trade, sleeves, equity, profile_name, stress, target_v
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c"], required=True,
+    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c", "012"], required=True,
                     help="010 = published monthly trend, 010c = carry in risk units, "
-                         "011/011c = the same, resized monthly to the book's volatility target")
+                         "011/011c = the same, resized monthly to the book's volatility target, "
+                         "012 = breadth verdict from the saved core and wide runs (no backtest)")
     ap.add_argument("--target-vol", type=float, default=0.12, help="011: annualised book volatility target")
     ap.add_argument("--with-trend", action="store_true", help="009/010c: also run carry beside the trend ensemble")
     ap.add_argument("--lookbacks", nargs="+", type=int, default=None,
@@ -245,11 +283,26 @@ def main() -> int:
     ap.add_argument("--profile", default="research")
     ap.add_argument("--data", default="data/futures")
     ap.add_argument("--trials", type=int, default=TRIALS_SO_FAR)
+    ap.add_argument("--universe", choices=["core", "wide"], default="core",
+                    help="core = the 33 markets of 007-011; wide = all 46 (entry 012)")
+    ap.add_argument("--tag", default="", help="suffix for the output json, e.g. _wide")
     args = ap.parse_args()
 
-    bars, specs, trade = load_universe(args.since, Path(args.data), args.size_as)
-    names = list(FULL_UNIVERSE)
-    print(f"{len(names)} markets, {args.since}-{date.today().year}, equity {args.equity:,.0f}, "
+    if args.entry == "012":
+        rows = verdict_012(Path("state"))
+        print("\nVERDICT, entry 012 (breadth: 46 markets against 33, same rules, same window)")
+        print("=" * 70)
+        for label, ok, detail in rows:
+            print(f"  {'PASS' if ok else 'FAIL':<5} {label:<60} {detail}")
+        passed = all(ok for label, ok, _ in rows if label[0].isdigit())
+        print(f"\n  {'ALL THRESHOLDS PASSED' if passed else 'FAILED - breadth within CME is exhausted as a lever here'}")
+        (Path("state") / "gauntlet_012.json").write_text(json.dumps(
+            {"verdict": [{"test": l, "pass": bool(ok), "detail": d} for l, ok, d in rows], "passed": passed}, indent=2))
+        return 0 if passed else 1
+
+    names = list(CORE_UNIVERSE if args.universe == "core" else FULL_UNIVERSE)
+    bars, specs, trade = load_universe(args.since, Path(args.data), args.size_as, names)
+    print(f"{len(names)} markets ({args.universe}), {args.since}-{date.today().year}, equity {args.equity:,.0f}, "
           f"costs x{args.stress:g}, profile {args.profile}, sized as {args.size_as}")
 
     results: dict[str, dict] = {}
@@ -277,8 +330,8 @@ def main() -> int:
     else:
         carry_kind = {"009": "carry", "010c": "carry010", "011c": "carry011"}[args.entry]
         trend_kind = {"009": "trend", "010c": "tsmom", "011c": "tsmom011"}[args.entry]
-        trend_json = state / {"009": "gauntlet_007.json", "010c": "gauntlet_010.json",
-                              "011c": "gauntlet_011.json"}[args.entry]
+        trend_json = state / ({"009": "gauntlet_007", "010c": "gauntlet_010",
+                               "011c": "gauntlet_011"}[args.entry] + args.tag + ".json")
         carry_sleeves = build_sleeves(names, [carry_kind], [], False)
         res = run_book(bars, specs, trade, carry_sleeves, args.equity, args.profile, args.stress, target_vol)
         print(portfolio_report(res))
@@ -310,7 +363,7 @@ def main() -> int:
     results["verdict"] = [{"test": l, "pass": bool(ok), "detail": d} for l, ok, d in rows]
     results["passed"] = passed
     results["args"] = vars(args)
-    (state / f"gauntlet_{args.entry}{'_with_trend' if args.with_trend else ''}.json").write_text(
+    (state / f"gauntlet_{args.entry}{'_with_trend' if args.with_trend else ''}{args.tag}.json").write_text(
         json.dumps(results, indent=2, default=str))
     return 0 if passed else 1
 

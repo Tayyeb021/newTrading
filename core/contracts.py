@@ -145,6 +145,21 @@ def last_trade_date(rule: str, year: int, month: int) -> date:
     if rule == "feeder":
         # CME feeder cattle: last Thursday of the contract month, cash settled.
         return _last_weekday(year, month, 3)
+    if rule == "brent":
+        # CME Brent last-day financial: last business day of the SECOND month before the contract month.
+        py, pm = _prior_month(*_prior_month(year, month))
+        return _last_busday(py, pm)
+    if rule == "nikkei":
+        # CME Nikkei 225: the business day before the second Friday (the SQ day).
+        return _add_busdays(_nth_weekday(year, month, 4, 2), -1)
+    if rule == "sofr3":
+        # CME three-month SOFR: business day before the third Wednesday of the
+        # month THREE months after the contract month (the reference quarter's end).
+        ry, rm = year + (month + 2) // 12, (month + 2) % 12 + 1
+        return _add_busdays(_nth_weekday(ry, rm, 2, 3), -1)
+    if rule == "last_friday":
+        # CME bitcoin: last Friday of the contract month, cash settled.
+        return _last_weekday(year, month, 4)
     raise ValueError(f"unknown expiry rule {rule!r}")
 
 
@@ -341,16 +356,40 @@ FULL_UNIVERSE: dict[str, FuturesRoot] = {
     "LE":  _r("LE", "CME", "Live Cattle", 400.0, 0.025, (2, 4, 6, 8, 10, 12), "last_busday", roll=5, margin=800.0, bucket="meats", fnd="prior_month_end"),
     "HE":  _r("HE", "CME", "Lean Hogs", 400.0, 0.025, (2, 4, 5, 6, 7, 8, 10, 12), "lean_hogs", roll=5, margin=800.0, bucket="meats"),
     "GF":  _r("GF", "CME", "Feeder Cattle", 500.0, 0.025, (1, 3, 4, 5, 8, 9, 10, 11), "feeder", roll=5, margin=1000.0, bucket="meats"),
+    # ---- the wide universe (entry 012): thirteen more CME Group markets, specs
+    # ---- and expiries read from the exchange's definitions on 2025-06-02
+    "BZ":  _r("BZ", "NYMEX", "Brent Last Day Financial", 1000.0, 0.01, MONTHLY, "brent", margin=2000.0, bucket="energy"),
+    "PA":  _r("PA", "NYMEX", "Palladium", 100.0, 0.5, QUARTERLY, "metals", roll=5, margin=3000.0, bucket="metals", fnd="prior_month_end"),
+    "6M":  _r("6M", "CME", "Mexican Peso", 500_000.0, 0.00001, QUARTERLY, "fx", margin=600.0, bucket="em_fx"),
+    "6Z":  _r("6Z", "CME", "South African Rand", 500_000.0, 0.000025, QUARTERLY, "fx", margin=600.0, bucket="em_fx"),
+    "6L":  _r("6L", "CME", "Brazilian Real", 100_000.0, 0.00005, MONTHLY, "refined", margin=800.0, bucket="em_fx"),
+    "NKD": _r("NKD", "CME", "Nikkei 225 (USD)", 5.0, 5.0, QUARTERLY, "nikkei", margin=1500.0, bucket="asia_indices"),
+    "EMD": _r("EMD", "CME", "E-mini S&P MidCap 400", 100.0, 0.1, QUARTERLY, "third_friday", margin=2000.0, bucket="us_indices"),
+    "ZO":  _r("ZO", "CBOT", "Oats", 50.0, 0.25, (3, 5, 7, 9, 12), "grains", roll=5, margin=500.0, bucket="grains", fnd="prior_month_end"),
+    "ZR":  _r("ZR", "CBOT", "Rough Rice", 2000.0, 0.005, (1, 3, 5, 7, 9, 11), "grains", roll=5, margin=700.0, bucket="grains", fnd="prior_month_end"),
+    "SR3": _r("SR3", "CME", "Three-Month SOFR", 2500.0, 0.0025, QUARTERLY, "sofr3", comm=1.50, margin=300.0, bucket="rates"),
+    "ZQ":  _r("ZQ", "CBOT", "30-Day Fed Funds", 4167.0, 0.0025, MONTHLY, "last_busday", comm=1.50, margin=300.0, bucket="rates"),
+    "TN":  _r("TN", "CBOT", "Ultra 10-Year T-Note", 1000.0, 0.015625, QUARTERLY, "treasury", roll=3, comm=1.50, margin=700.0, bucket="rates", fnd="prior_month_end"),
+    "BTC": _r("BTC", "CME", "Bitcoin", 5.0, 5.0, MONTHLY, "last_friday", margin=15000.0, bucket="crypto"),
 }
 
+#: The 33 markets of entries 007-011. The rest of FULL_UNIVERSE joins in 012.
+CORE_UNIVERSE: tuple[str, ...] = (
+    "ES", "NQ", "YM", "RTY", "ZT", "ZF", "ZN", "ZB", "UB", "6E", "6J", "6B", "6A", "6C", "6S", "6N",
+    "GC", "SI", "HG", "PL", "CL", "NG", "RB", "HO", "ZC", "ZS", "ZW", "KE", "ZM", "ZL", "LE", "HE", "GF",
+)
+
 SECTORS: dict[str, tuple[str, ...]] = {
-    "us_indices": ("ES", "NQ", "YM", "RTY"),
-    "rates": ("ZT", "ZF", "ZN", "ZB", "UB"),
+    "us_indices": ("ES", "NQ", "YM", "RTY", "EMD"),
+    "asia_indices": ("NKD",),
+    "rates": ("ZT", "ZF", "ZN", "ZB", "UB", "TN", "SR3", "ZQ"),
     "usd_majors": ("6E", "6J", "6B", "6A", "6C", "6S", "6N"),
-    "metals": ("GC", "SI", "HG", "PL"),
-    "energy": ("CL", "NG", "RB", "HO"),
-    "grains": ("ZC", "ZS", "ZW", "KE", "ZM", "ZL"),
+    "em_fx": ("6M", "6Z", "6L"),
+    "metals": ("GC", "SI", "HG", "PL", "PA"),
+    "energy": ("CL", "NG", "RB", "HO", "BZ"),
+    "grains": ("ZC", "ZS", "ZW", "KE", "ZM", "ZL", "ZO", "ZR"),
     "meats": ("LE", "HE", "GF"),
+    "crypto": ("BTC",),
 }
 
 # --------------------------------------------------------------------------- #
@@ -369,6 +408,7 @@ MICRO_UNIVERSE: dict[str, FuturesRoot] = {
     "M6A": _r("M6A", "CME", "Micro AUD/USD", 10_000.0, 0.0001, QUARTERLY, "fx", comm=0.85, margin=50.0, bucket="usd_majors"),
     "M6B": _r("M6B", "CME", "Micro GBP/USD", 6250.0, 0.0001, QUARTERLY, "fx", comm=0.85, margin=50.0, bucket="usd_majors"),
     "MCL": _r("MCL", "NYMEX", "Micro WTI Crude", 100.0, 0.01, MONTHLY, "crude", comm=1.00, margin=200.0, bucket="energy"),
+    "MBT": _r("MBT", "CME", "Micro Bitcoin", 0.1, 5.0, MONTHLY, "last_friday", comm=1.00, margin=1500.0, bucket="crypto"),
     # No micro exists; the full contract is the smallest. Kept here so the
     # tradeable list has a rates leg for accounts large enough to hold it.
     "ZN": FULL_UNIVERSE["ZN"],
@@ -380,6 +420,7 @@ MICRO_OF: dict[str, str] = {
     "GC": "MGC", "SI": "SIL", "HG": "MHG",
     "6E": "M6E", "6A": "M6A", "6B": "M6B",
     "CL": "MCL",
+    "BTC": "MBT",
 }
 PARENT_OF: dict[str, str] = {v: k for k, v in MICRO_OF.items()}
 

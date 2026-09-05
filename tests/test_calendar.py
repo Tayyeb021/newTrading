@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.contracts import (  # noqa: E402
-    ALL_ROOTS, FULL_UNIVERSE, MICRO_OF, MICRO_UNIVERSE, PARENT_OF, SECTORS,
+    ALL_ROOTS, CORE_UNIVERSE, FULL_UNIVERSE, MICRO_OF, MICRO_UNIVERSE, PARENT_OF, SECTORS,
     data_root, first_notice_date, last_trade_date, tradeable,
 )
 
@@ -107,12 +107,26 @@ def test_energy_last_trade_precedes_delivery_so_no_first_notice():
 
 # ---------------------------------------------------------------- universe
 
-def test_universe_has_seven_sectors_and_thirty_three_markets():
-    assert len(FULL_UNIVERSE) == 33
+def test_universe_has_ten_sectors_and_forty_six_markets():
+    assert len(FULL_UNIVERSE) == 46 and len(CORE_UNIVERSE) == 33
+    assert set(CORE_UNIVERSE) < set(FULL_UNIVERSE)
     assert sorted(sum(SECTORS.values(), ())) == sorted(FULL_UNIVERSE)
     for sector, roots in SECTORS.items():
         for r in roots:
             assert FULL_UNIVERSE[r].bucket == sector
+
+
+def test_new_expiry_rules_match_the_exchange_examples():
+    # dates read off the exchange's definitions on 2025-06-02
+    assert last_trade_date("brent", 2025, 8) == date(2025, 6, 30)
+    assert last_trade_date("brent", 2026, 1) == date(2025, 11, 28)
+    assert last_trade_date("nikkei", 2025, 6) == date(2025, 6, 12)
+    assert last_trade_date("nikkei", 2026, 3) == date(2026, 3, 12)
+    assert last_trade_date("sofr3", 2025, 3) == date(2025, 6, 17)
+    assert last_trade_date("sofr3", 2025, 4) == date(2025, 7, 15)
+    assert last_trade_date("last_friday", 2025, 12) == date(2025, 12, 26)
+    assert last_trade_date("last_friday", 2026, 3) == date(2026, 3, 27)
+    assert last_trade_date("last_busday", 2026, 1) == date(2026, 1, 30)  # ZQ January 2026
 
 
 @pytest.mark.parametrize("name", sorted(ALL_ROOTS))

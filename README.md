@@ -419,7 +419,7 @@ edge can exist. Everything above the execution adapter is unchanged.
 
 | Piece | File | Proven by |
 |---|---|---|
-| Contract calendar, expiry rules, front month, roll dates | `core/contracts.py` | dates checked against CME/COMEX/NYMEX rules |
+| Contract calendar: 33 CME Group markets, 7 sectors, expiry **and first-notice** rules, front month, roll dates | `core/contracts.py` | 60 dates checked by hand against the exchange specs; every root's schedule contiguous 2018–2026 |
 | Back-adjusted continuous series, roll log, roll cost | `data/continuous.py` | no jump at the roll; returns preserved |
 | IB adapter: front-month resolution, child stops, roll | `execution/ib_adapter.py` | 12-step round trip on the test double |
 | IB test double | `execution/ib_fake.py` | — |
@@ -428,13 +428,32 @@ edge can exist. Everything above the execution adapter is unchanged.
 | Futures cost model: commission, ticks, **no swap** | `CostModel.for_futures` | — |
 
 ```bash
-python scripts/verify_roundtrip_ib.py --fake          # the whole path, no broker
-python scripts/backtest_futures.py --synthetic        # stitch -> portfolio engine, no data
-python scripts/download_cot.py --years 15             # free, real
-python research/cot_screen.py                         # positioning as a signal
-set DATABENTO_API_KEY=db-... && python scripts/download_databento.py --roots MES MGC
-python scripts/verify_roundtrip_ib.py                 # against TWS paper (port 7497), dry run
+python scripts/verify_roundtrip_ib.py --fake                       # the whole path, no broker
+python scripts/backtest_futures.py --synthetic --universe full     # 33 markets through the stitch and the engine, no data
+python scripts/download_cot.py --years 15                          # free, real
+python research/cot_screen.py                                      # positioning as a signal
+set DATABENTO_API_KEY=db-...
+python scripts/download_databento.py --dry-run --universe full     # Databento's own cost estimate, spends nothing
+python scripts/download_databento.py --universe full               # daily bars, every expiry, since 2010
+python scripts/backtest_futures.py --universe full --equity 2000000 --size-as full --lookbacks 20 60 120
+python scripts/verify_roundtrip_ib.py                              # against TWS paper (port 7497), dry run
 ```
+
+**Two universes.** `FULL_UNIVERSE` is the research universe: 33 full-size
+contracts across index, rates, FX, metals, energy, grains and meats — the breadth
+that trend-following evidence says the strategy needs. `MICRO_UNIVERSE` is what a
+small account can trade; `MICRO_OF` links the two. History is always read from
+the full-size contract (longest record, same price to a tick) and positions are
+sized with the micro, so a backtest answers "what could *this* account hold"
+rather than "what could a fund hold". The `research` risk profile widens the
+account-level limits so a nine-year test measures the signal rather than a prop
+rule; the same book is then re-run under `challenge` to see what the rules cost.
+
+**Roll before first notice, not before last trade.** Cash-settled contracts can
+be held to expiry. Physically delivered ones — grains, metals, cattle, treasuries
+— send delivery notices from first-notice day, which falls *before* last trade.
+The calendar anchors the roll on whichever comes first. The original ZN entry
+rolled off last trade and would have carried a long past first position day.
 
 Two rules the futures side adds. **A symbol is a root, not a contract**: the
 strategy says `MES`, the adapter resolves the live month and rolls before

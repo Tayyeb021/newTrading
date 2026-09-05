@@ -1,0 +1,51 @@
+# Risk profile: RESEARCH. Not for any live account.
+#
+# The challenge and funded profiles exist to survive a prop firm's rulebook. This
+# one exists to answer a different question: does an edge exist at all, before any
+# rulebook is applied? For that the account-level limits must be wide enough that
+# the risk engine sizes and gates trades exactly as it would live, but never halts
+# a nine-year backtest on a bad month and never starves a 33-market book with a
+# three-position cap. A strategy that survives here is then re-run under
+# `challenge` to see what the rules cost it.
+#
+# Everything below is a limit, never a target. Position size still comes from
+# `risk_per_trade` and the structural stop, exactly as everywhere else.
+
+profile: research
+
+account:
+  size: 250000
+  currency: USD
+
+sizing:
+  risk_per_trade: 0.005
+  max_risk_per_trade: 0.01
+  atr_period: 14
+  atr_stop_multiple: 2.5
+
+limits:
+  daily_loss_soft: 0.10
+  daily_loss_hard: 0.20
+  max_drawdown_soft: 0.30
+  max_drawdown_hard: 0.50
+  drawdown_trailing: false
+
+  max_concurrent_positions: 40
+  max_open_risk: 0.15 # 30 positions at 0.5% -- breadth is the point
+  max_bucket_risk: 0.04 # one sector may not become the whole book
+  consecutive_losses: 100 # effectively off; a trend book loses six in a row routinely
+  consecutive_loss_pause_hours: 1
+  min_margin_level: 1.5
+  max_spread_multiple: 3.0
+  max_feed_age_seconds: 60.0
+
+# One budget per sector. Both the full-size research root and its micro are
+# listed so a book sized as micros lands in the same bucket.
+buckets:
+  us_indices: [ES, NQ, YM, RTY, MES, MNQ, MYM, M2K, US30, US500, NAS100]
+  rates: [ZT, ZF, ZN, ZB, UB]
+  usd_majors: [6E, 6J, 6B, 6A, 6C, 6S, 6N, M6E, M6A, M6B, EURUSD, GBPUSD, AUDUSD, NZDUSD, USDJPY]
+  metals: [GC, SI, HG, PL, MGC, SIL, MHG, XAUUSD, XAGUSD]
+  energy: [CL, NG, RB, HO, MCL]
+  grains: [ZC, ZS, ZW, KE, ZM, ZL]
+  meats: [LE, HE, GF]

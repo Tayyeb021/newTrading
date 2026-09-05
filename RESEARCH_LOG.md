@@ -262,3 +262,57 @@ modelled by design. Nothing survived to need them.
 Data quality: the loader tracked the CFTC's own renames - ES in 2022, WTI in
 2023 - and NQ's e-mini row disappearing behind the micro row, which is now
 aliased. 11 years, 5 markets, 152,000 rows.
+
+---
+
+## 007 — Diversified trend following on 33 CME markets — **PRE-REGISTERED, awaiting data**
+
+*2026-09-05. Calendar, research profile and scripts built and tested; the
+Databento key is the user's credential and is pending. Thresholds declared here,
+before any bar is downloaded.*
+
+Why this hypothesis and not another: every family tested so far (001–006) was
+a price pattern on four to eight correlated retail CFDs. The one family with a
+century of published evidence — Hurst, Ooi & Pedersen (2017): 67 markets,
+1880–2016, Sharpe ≈ 0.4 after costs at the portfolio level — was tested in 002
+on four instruments, which is the one setting where the evidence itself says it
+is barely visible. A trend book's return comes from breadth, and the
+diversification benefit keeps rising past 30 markets (Man Group, 2025).
+
+Universe: `FULL_UNIVERSE` — 33 full-size CME Group markets, 7 sectors (index 4,
+rates 5, FX 7, metals 4, energy 4, grains 6, meats 3). Data root = full size;
+sizing root = micro where one exists.
+
+Signal: `TrendFollowing` exactly as it stands in `strategies/trend.py`. Three
+speeds only — lookback 20, 60 and 120 days — as three sleeves and as their
+equal-weight ensemble. **That is four trials.** No other parameter will be
+varied. Running total: 174.
+
+Costs: `CostModel.for_futures` — one tick of spread, half a tick of slippage,
+commission per side from the root; stressed at 2×; roll friction journaled per
+roll; no swap.
+
+Data: Databento GLBX.MDP3, ohlcv-1d, 2011-01-01 to present, per expiry,
+stitched by `data/continuous.py` with Panama back-adjustment and rolls before
+first notice.
+
+Pass thresholds, declared now:
+
+1. Ensemble net Sharpe ≥ 0.40 over the full sample at the 2× cost stress, at an
+   equity where sizing granularity never binds (`--equity 2000000 --size-as full`).
+2. Positive net P&L in at least 70% of calendar years.
+3. Probability of backtest overfitting (CSCV, 8 partitions) < 0.50 across the
+   three speeds — the choice of speed is not what makes it work.
+4. Deflated Sharpe > 0 given 174 trials.
+5. Walk-forward: the last five years out of sample under parameters fixed on
+   the first ten, net Sharpe > 0.
+6. At least five of the seven sectors contribute positive net P&L in the
+   ensemble. Breadth, not one lucky sector.
+
+Fail any one and the family is reported dead like the others. Pass all six and
+the next step is the same book under `--profile challenge` at the capital
+ladder's equity levels, then a paper run on IB.
+
+What this cannot show: anything about intraday, anything about the CFD broker.
+It is the daily-bar, exchange-cleared version of the only idea left with
+evidence behind it.

@@ -8,7 +8,7 @@ paths, and it is what lets you change a limit without a deploy.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +130,14 @@ class RiskProfile:
 class InstrumentConfig:
     symbols: list[str]
     aliases: dict[str, str]
+    active: list[str] = field(default_factory=list)  # what the live/shadow runner trades; defaults to all
+
+    def __post_init__(self) -> None:
+        if not self.active:
+            object.__setattr__(self, "active", list(self.symbols))
+        unknown = [s for s in self.active if s not in self.symbols]
+        if unknown:
+            raise ValueError(f"active symbols not in symbols: {unknown}")
 
     @classmethod
     def load(cls, path: str = "instruments.yaml") -> "InstrumentConfig":
@@ -137,6 +145,7 @@ class InstrumentConfig:
         return cls(
             symbols=list(raw.get("symbols") or []),
             aliases={str(k): str(v) for k, v in (raw.get("aliases") or {}).items()},
+            active=list(raw.get("active") or []),
         )
 
     def resolve(self, symbol: str) -> str:

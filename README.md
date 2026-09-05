@@ -223,6 +223,42 @@ gold during a news spike must not stall ingest for everything else.
 Shutdown on Ctrl+C is graceful and **does not close positions**. Stopping the
 software is not the same as wanting to be flat.
 
+### Shadow mode
+
+```bash
+python scripts/shadow.py --minutes 30                          # attended
+python scripts/shadow.py --until 2026-09-11T21:00Z --quiet     # unattended, absolute end time
+python scripts/shadow_report.py --hours 24                     # digest of the journal
+```
+
+The real runner, risk engine, OMS and journal on live MT5 prices, with orders
+routed to the paper adapter. It is the plumbing test a backtest cannot be: live
+tick freshness, bar-close detection, the worker thread, state persistence and
+every account limit against real account numbers. No order reaches the broker.
+
+Unattended runs must outlive the broker: a failed iteration is journalled as
+`loop_error`, three in a row force a reconnect, and the loop carries on. `--until`
+is an absolute time so a restarted run ends when the original would have.
+
+**The scheduled week, 2026-09-06 → 09-11.** Three Windows Task Scheduler tasks,
+registered 2026-09-05. All run "only when user is logged on", because the MT5
+Python API needs the terminal in the same session — disconnect RDP, do not sign out.
+
+| task | when (UTC) | runs |
+|---|---|---|
+| `TradingShadowWeek` | Sun 21:00 once; 125 h limit; 3 restarts | `scripts/shadow_week.cmd` → `shadow.py --until 2026-09-11T21:00Z --quiet` |
+| `TradingShadowReport` | Mon–Fri 21:30 | `scripts/shadow_report.cmd 24` → `state/shadow_reports.md` |
+| `TradingShadowWeekReport` | Fri 21:40 once | `scripts/shadow_report.cmd 168` |
+
+Watch `state/shadow_week.log`, `state/shadow_journal.jsonl`, `state/shadow_reports.md`.
+Stop early: create `state/SHADOW_KILL` (the runner halts and stays halted), or
+`schtasks /End /TN TradingShadowWeek`. Remove everything with
+`Get-ScheduledTask -TaskName "TradingShadow*" | Unregister-ScheduledTask -Confirm:$false`.
+
+The strategy in shadow is `MTFPullback` on M15 — a family the research killed. The
+week measures the infrastructure, not the edge: expect the digest to show refusals
+and heartbeats, not profits.
+
 ### Emergency
 
 ```bash

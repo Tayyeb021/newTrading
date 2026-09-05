@@ -12,6 +12,11 @@ persistence, and every account-level limit against real account numbers.
 
     python scripts/shadow.py --minutes 5
     python scripts/shadow.py --symbols EURUSD XAUUSD --minutes 30
+    python scripts/shadow.py --minutes 7200 --quiet      # a trading week, unattended
+
+Unattended runs must outlive the broker: a failed iteration is journalled as
+`loop_error`, three in a row trigger a reconnect, and the loop carries on. The
+runner's own state file carries the session book across a process restart.
 """
 
 from __future__ import annotations
@@ -32,6 +37,8 @@ from ops.journal import Journal  # noqa: E402
 from risk.build import build_engine  # noqa: E402
 from risk.killswitch import KillFile  # noqa: E402
 from strategies.mtf_pullback import MTFPullback  # noqa: E402
+
+RECONNECT_AFTER = 3  # consecutive failed iterations before we assume the link is gone
 
 
 class ShadowAdapter(PaperAdapter):
@@ -64,14 +71,31 @@ class ShadowAdapter(PaperAdapter):
         return self._live.spec(symbol)
 
 
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%m-%d %H:%M:%S")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbols", nargs="+", default=None)
     ap.add_argument("--timeframe", default="M15")
     ap.add_argument("--minutes", type=float, default=5.0)
+    ap.add_argument("--until", default=None, metavar="ISO8601",
+                    help="absolute UTC end time, e.g. 2026-09-11T21:00Z; overrides --minutes and makes "
+                         "a restarted run end at the same moment as the original")
     ap.add_argument("--poll", type=float, default=10.0)
     ap.add_argument("--profile", default="challenge")
+    ap.add_argument("--quiet", action="store_true",
+                    help="print only when positions/halt change, plus an hourly line (unattended runs)")
     args = ap.parse_args()
+
+    if args.until:
+        end = datetime.fromisoformat(args.until.replace("Z", "+00:00"))
+        end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end.astimezone(timezone.utc)
+        args.minutes = (end - datetime.now(timezone.utc)).total_seconds() / 60
+        if args.minutes <= 0:
+            print(f"deadline {end:%Y-%m-%d %H:%M} UTC has passed; nothing to do", flush=True)
+            return 0
 
     from execution.mt5_adapter import MT5Adapter
 
@@ -84,12 +108,13 @@ def main() -> int:
     specs = {s: live.spec(s) for s in symbols}
     account = live.account()
 
-    print(f"\nSHADOW MODE - live data, paper execution")
+    print(f"\nSHADOW MODE - live data, paper execution   ({_stamp()} UTC)")
     print(f"  account   : {account.equity:,.2f} {account.currency} (real, read-only)")
     print(f"  clock     : {live.clock_status.value if live.clock_status else 'unknown'}")
     print(f"  symbols   : {', '.join(symbols)} on {args.timeframe}")
     print(f"  profile   : {profile.name}, risk {profile.risk_per_trade:.2%}/trade")
-    print(f"  duration  : {args.minutes:g} min, polling every {args.poll:g}s\n")
+    print(f"  duration  : {args.minutes:g} min, polling every {args.poll:g}s"
+          f"{', quiet' if args.quiet else ''}\n", flush=True)
 
     shadow = ShadowAdapter(live, specs)
     engine = build_engine(profile, account.equity, specs)
@@ -105,19 +130,45 @@ def main() -> int:
 
     for note in runner.start():
         print(f"  {note}")
-    print()
+    print(flush=True)
 
     deadline = time.time() + args.minutes * 60
-    ticks = 0
+    ticks = failures = errors = 0
+    last_shown: tuple | None = None
+    next_hourly = time.time() + 3600
     try:
         while time.time() < deadline:
             ticks += 1
-            runner.tick()
-            state_now = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            try:
+                runner.tick()
+            except Exception as exc:  # noqa: BLE001 - a week-long run must outlive a broker hiccup
+                failures += 1
+                errors += 1
+                runner.journal.write("loop_error", error=f"{type(exc).__name__}: {exc}", consecutive=failures)
+                print(f"  [{_stamp()}] iteration failed ({failures} in a row): {type(exc).__name__}: {exc}", flush=True)
+                if failures >= RECONNECT_AFTER:
+                    try:
+                        live.disconnect()
+                        live.connect()
+                        runner.journal.write("reconnect", ok=True, clock=str(live.clock_status))
+                        print(f"  [{_stamp()}] reconnected to MT5 ({live.clock_status})", flush=True)
+                        failures = 0
+                    except Exception as exc2:  # noqa: BLE001
+                        runner.journal.write("reconnect", ok=False, error=str(exc2))
+                        print(f"  [{_stamp()}] reconnect failed: {exc2}", flush=True)
+                time.sleep(min(60.0, args.poll * max(1, failures)))
+                continue
+            failures = 0
+
             acct = shadow.account()
-            print(f"  [{state_now}] iter {ticks:<3} equity {acct.equity:>12,.2f}  "
-                  f"positions {len(shadow.positions())}  "
-                  f"halted={runner.halted}")
+            shown = (len(shadow.positions()), runner.halted)
+            hourly = time.time() >= next_hourly
+            if not args.quiet or shown != last_shown or hourly:
+                print(f"  [{_stamp()}] iter {ticks:<6} equity {acct.equity:>12,.2f}  "
+                      f"positions {shown[0]}  halted={shown[1]}  errors={errors}", flush=True)
+                last_shown = shown
+                if hourly:
+                    next_hourly = time.time() + 3600
             time.sleep(args.poll)
     except KeyboardInterrupt:
         print("\n  interrupted")
@@ -125,9 +176,9 @@ def main() -> int:
         runner.shutdown()
         live.disconnect()
 
-    print(f"\n  {ticks} iterations")
+    print(f"\n  {ticks} iterations, {errors} failed")
     print(f"  {runner.journal.summary()}")
-    print(f"\n  No order reached the broker. Journal: {runner.journal.path}")
+    print(f"\n  No order reached the broker. Journal: {runner.journal.path}", flush=True)
     return 0
 
 

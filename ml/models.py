@@ -30,7 +30,8 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
-from features.indicators import atr, ema, realized_vol, rolling_percentile, rolling_return
+from features.indicators import atr, ema, price_vol, rolling_percentile
+from ml.cv import PurgedKFold
 
 
 class Regime(Enum):
@@ -63,16 +64,20 @@ def regime_features(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     Deliberately small. A regime model with thirty features is a regime model
     that has memorised the sample.
     """
+    # Every feature is shift-invariant: built from differences, ranges and ATR
+    # ratios, never from the price LEVEL. A back-adjusted futures series is the
+    # real one plus a constant per roll, so its level means nothing and can go
+    # negative; a feature that divides by it is garbage on old history.
     out = pd.DataFrame(index=df.index)
     a = atr(df, 14)
-    out["vol"] = rolling_percentile(a / df["close"], 252)
+    out["vol"] = rolling_percentile(a, 252)
     out["vol_change"] = a / a.rolling(period, min_periods=period).mean() - 1.0
 
     # Efficiency ratio: net movement over total path. High means trending.
     net = (df["close"] - df["close"].shift(period)).abs()
     path = df["close"].diff().abs().rolling(period, min_periods=period).sum()
     out["efficiency"] = net / path.replace(0, np.nan)
-    out["trend"] = (df["close"] / ema(df["close"], period) - 1.0).abs()
+    out["trend"] = (df["close"] - ema(df["close"], period)).abs() / a.replace(0, np.nan)
     return out
 
 
@@ -148,15 +153,19 @@ def meta_features(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     """
     out = pd.DataFrame(index=df.index)
     a = atr(df, 14)
+    safe_a = a.replace(0, np.nan)
 
     out["atr_pct"] = rolling_percentile(a, 252)
     out["vol_ratio"] = a / a.rolling(period, min_periods=period).mean()
-    out["realized_vol"] = realized_vol(df["close"], period)
+    # close-to-close volatility relative to the range: a shift-invariant
+    # replacement for log-return volatility (see regime_features)
+    out["cc_vs_range"] = price_vol(df["close"], period) / safe_a
 
     for lb in (5, 20, 60):
-        out[f"mom_{lb}"] = rolling_return(df["close"], lb)
+        # momentum in ATR units over the horizon, not a percentage of a level
+        out[f"mom_{lb}"] = (df["close"] - df["close"].shift(lb)) / (safe_a * np.sqrt(lb))
 
-    out["dist_ema_atr"] = (df["close"] - ema(df["close"], 50)) / a
+    out["dist_ema_atr"] = (df["close"] - ema(df["close"], 50)) / safe_a
     out["range_ratio"] = (df["high"] - df["low"]) / a
 
     net = (df["close"] - df["close"].shift(period)).abs()
@@ -189,7 +198,17 @@ class MetaLabelModel:
         y: np.ndarray,
         sample_weight: np.ndarray | None = None,
         cv=None,
+        t0: np.ndarray | None = None,
+        t1: np.ndarray | None = None,
+        embargo_pct: float = 0.01,
     ) -> "MetaLabelModel":
+        """Fit and calibrate. Calibration folds MUST be purged.
+
+        Pass `cv` as a list of purged (train, test) index pairs, or pass the
+        label spans `t0`/`t1` and they are built here. An integer is refused:
+        scikit-learn's default k-fold puts overlapping labels either side of a
+        split, and a calibrator fitted that way has seen its own answers.
+        """
         if len(x) < self.min_samples:
             raise ValueError(
                 f"{len(x)} samples is below the {self.min_samples} minimum. A model "
@@ -197,15 +216,21 @@ class MetaLabelModel:
             )
         if len(np.unique(y)) < 2:
             raise ValueError("labels are all one class - nothing to learn")
+        if isinstance(cv, int):
+            raise ValueError("an integer cv is an unpurged split; pass purged folds or t0/t1")
+        if cv is None:
+            if t0 is None or t1 is None:
+                raise ValueError("calibration needs purged folds: pass cv=<purged splits> or t0/t1")
+            cv = list(PurgedKFold(n_splits=3, embargo_pct=embargo_pct).split(np.asarray(t0), np.asarray(t1)))
 
         self._columns = list(x.columns)
         base = HistGradientBoostingClassifier(
             max_iter=180, max_depth=3, learning_rate=0.05,
             min_samples_leaf=30, l2_regularization=1.0, random_state=7,
         )
-        # Isotonic calibration on a purged splitter where one is supplied. An
-        # uncalibrated score is not a probability, and tier 3 sizes on it.
-        self._model = CalibratedClassifierCV(base, method="isotonic", cv=cv or 3)
+        # Isotonic calibration on purged folds. An uncalibrated score is not a
+        # probability, and tier 3 sizes on it.
+        self._model = CalibratedClassifierCV(base, method="isotonic", cv=cv)
         self._model.fit(x.to_numpy(), y, sample_weight=sample_weight)
         return self
 

@@ -17,3 +17,4 @@ tzdata>=2024.1
 
 # Tests
 pytest>=8.0
+mcp>=2.1        # ops/mcp_server.py: read-only assistant access

@@ -761,3 +761,93 @@ to 1980 exists at $270 a year (Norgate, ~100 markets, 11 exchanges); that is
 the user's money and the user's call, and the honest expectation from this
 entry is that doubling the market count again would add tenths of Sharpe,
 not halves. Trials: 195.
+
+---
+
+## 013 — Meta-labelling the monthly trend book — **PRE-REGISTERED, declared before running**
+
+*2026-09-05. Declared after 012's verdict and before any 013 number exists.*
+
+The first use of the machine-learning layer on a signal that is alive. It is
+a filter, not a forecaster: given that the monthly trend rule just fired, is
+this trade likely to make money by the next decision or its 4-ATR stop? The
+model may skip an entry or shrink it and can never enlarge one; holds and
+re-decisions on open positions pass through untouched, so it cannot become a
+second exit rule.
+
+Three things were fixed before this could be trusted on futures, all recorded
+in the code: the features now ignore the price level (a back-adjusted series
+has none), calibration folds must be purged and an integer split is refused,
+and the wrapper is generic rather than bolted to the dead daily rule.
+
+**Design.** Events: decision-day entries of TSMOM 60/120/250 across the 46
+markets, 2011 onward. Label: realised return by the 21-bar horizon or the
+stop, whichever first, positive or not. Features: the shift-invariant meta
+set plus the rule's own forecast strength and speed, from ONE function shared
+with the live wrapper. One gradient-boosting model (depth 3), isotonic
+calibration on purged folds, threshold 0.50: skip when the calibrated
+probability of profit is below a coin. Train on events resolved before
+2021-01-01, score on events entered after; straddlers dropped. Constants fixed
+from the phase-4 design, not tuned. **One trial.** Running total 196.
+
+**Pass thresholds, out of sample from 2021-01-01, same window, costs and
+equity for both books:**
+
+1. Brier score of the model's probabilities below the base-rate Brier. If it
+   knows nothing beyond the average, it stops here.
+2. Filtered ensemble net Sharpe ≥ plain ensemble + 0.05 at 2x costs.
+3. Filtered max drawdown ≤ plain's.
+4. The filter keeps at least half the entries. A filter that removes most of
+   a strategy is a different strategy.
+
+Fail any and the plain rule ships, exactly as the phase-4 script has always
+said. The family bar of 0.40 is reported alongside and remains the bar.
+
+---
+
+## 013 — VERDICT: **the model knows nothing beyond the base rate. DEAD as declared. The plain rule ships.**
+
+*2026-09-05, 46 markets, TSMOM 60/120/250, 23,988 decision-day entries,
+13,554 trained on (resolved before 2021-01-01), 9,464 scored (entered after).
+`state/gauntlet_013.json`, `state/gauntlet_013.log`.*
+
+| | value |
+|---|---|
+| out-of-sample Brier vs base-rate Brier | **0.2504 vs 0.2502** |
+| out-of-sample AUC | **0.509** |
+| entries kept at threshold 0.50 | **4%** |
+| plain book from 2021, net Sharpe / max DD / trades | 0.44 / 53% / 2,362 |
+| filtered book from 2021 | 0.20 / 18% / 127 |
+| purging | 688 of 10,166 per fold removed (6.8%); plain k-fold would have leaked 40,650 |
+
+Thresholds 1, 2 and 4 fail; 3 passes only because a book that barely trades
+barely draws down. Dead as declared.
+
+### Reading it
+
+- **A coin.** AUC 0.509 on 9,464 unseen trades means the calibrated model
+  cannot tell a trend entry that will pay from one that will not. The
+  features it was given - volatility state, momentum in ATR units, trend
+  efficiency, the rule's own forecast strength and speed - carry no
+  information about the next month's outcome beyond the 49% base rate. That
+  is consistent with everything the literature says about price-derived
+  features at this horizon, and it is the result the phase-4 script was
+  written to report without flinching.
+- **The threshold did the damage the numbers explain.** With every
+  probability hovering at 0.49, "skip below 0.50" skipped nearly all of them.
+  A lower threshold would keep more trades and change nothing about the
+  information content, which is the number that matters.
+- **The machinery is sound.** Purging removed 6.8% per fold once events
+  were in time order; the first attempt, pooled by market, removed 100% and
+  refused to train, which is what a leakage guard is for. The features are
+  shift-invariant and the calibrator cannot be run unpurged. The wrapper
+  touched only entries.
+- **Not licensed:** trying other features, thresholds, horizons or label
+  definitions until one "works". Each is a trial, and this one was declared
+  as one. If a future entry proposes a feature set with an economic reason
+  (positioning, seasonality, term-structure state), it is declared first.
+
+Trials: 196. The AI layer stays in the codebase as what it is: a bounded
+filter that has now been shown, on real data and out of sample, to add
+nothing to the monthly trend rule. The arithmetic trades; the model waits
+for a reason to exist.

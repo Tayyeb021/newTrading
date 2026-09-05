@@ -361,12 +361,38 @@ def test_meta_confidence_is_zero_below_the_threshold():
     x = pd.DataFrame({"a": rng.normal(size=400), "b": rng.normal(size=400)})
     y = (x["a"] > 0).astype(int).to_numpy()
 
-    model = MetaLabelModel(threshold=0.60).fit(x, y)
+    spans = np.arange(400)
+    model = MetaLabelModel(threshold=0.60).fit(x, y, t0=spans, t1=spans + 1)
     conf = model.confidence(x)
     prob = model.probability(x)
 
     assert ((prob < 0.60) == (conf == 0.0)).all(), "threshold not enforced"
     assert conf.min() >= 0.0 and conf.max() <= 1.0
+
+
+def test_meta_model_refuses_unpurged_calibration():
+    rng = np.random.default_rng(36)
+    x = pd.DataFrame({"a": rng.normal(size=400), "b": rng.normal(size=400)})
+    y = (x["a"] > 0).astype(int).to_numpy()
+    with pytest.raises(ValueError, match="unpurged"):
+        MetaLabelModel().fit(x, y, cv=3)
+    with pytest.raises(ValueError, match="purged folds"):
+        MetaLabelModel().fit(x, y)
+
+
+def test_ml_features_ignore_the_price_level():
+    """A back-adjusted futures series is the real one plus a constant per roll.
+    Every feature must read the same on the shifted series."""
+    df = price_frame(400, seed=37)
+    shifted = df.copy()
+    for col in ("open", "high", "low", "close"):
+        shifted[col] = shifted[col] + 5000.0
+    for fn in (meta_features, regime_features):
+        a, b = fn(df), fn(shifted)
+        for col in a.columns:
+            av, bv = a[col].to_numpy(dtype=float), b[col].to_numpy(dtype=float)
+            ok = np.isnan(av) & np.isnan(bv)
+            assert np.allclose(av[~ok], bv[~ok], rtol=1e-7, atol=1e-9), f"{fn.__name__}.{col} depends on the level"
 
 
 def test_confidence_can_only_reduce_position_size():

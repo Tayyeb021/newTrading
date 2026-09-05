@@ -307,6 +307,18 @@ what prevents it.
 Retries are classified, not blanket: a requote is retried, "invalid stops" is not,
 and an unrecognised reason is not retried at all — investigate it instead.
 
+## Asking an assistant about the system (MCP)
+
+`.mcp.json` registers `ops/mcp_server.py`, so Claude Code opened in this
+repository can call read-only tools against the running system: `status` (last
+heartbeat, halted, kill switch, session book), `journal`, `decisions` (with the
+limit that refused each one), `shadow_report`, `verdicts` (every pre-registered
+result on disk), `research_log` (by entry number), `capital_ladder`, and
+`live_account` (connects to the terminal, reads, disconnects). Every tool is
+annotated read-only, and `ops/mcp_tools.py` has no code path to an execution
+write; a test asserts that. An assistant can explain what the system did and
+why. It cannot trade, and cannot be talked into it.
+
 ## The AI layer
 
 ```bash

@@ -131,7 +131,8 @@ def main() -> int:
         if len(np.unique(y[train_idx])) < 2 or len(test_idx) == 0:
             continue
         fold = MetaLabelModel(threshold=0.55, min_samples=20).fit(
-            x.iloc[train_idx], y[train_idx], sample_weight=weights[train_idx], cv=2,
+            x.iloc[train_idx], y[train_idx], sample_weight=weights[train_idx],
+            t0=t0[train_idx], t1=t1[train_idx],  # purged inside the fold too
         )
         oof[test_idx] = fold.probability(x.iloc[test_idx])
 

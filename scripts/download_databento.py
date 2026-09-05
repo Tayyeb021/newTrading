@@ -91,7 +91,8 @@ def main() -> int:
         print("  Get a key at databento.com (new accounts carry free credit), then, in your own shell:")
         print('    PowerShell:  $env:DATABENTO_API_KEY = "db-..."      cmd:  set DATABENTO_API_KEY=db-...')
         print("  Never paste the key into a chat or a file; the script reads it from the environment only.")
-        print("  Daily bars are metered per gigabyte; the whole research universe is a few megabytes.")
+        print("  Daily bars are metered per gigabyte; the whole research universe is on the order of")
+        print("  a hundred megabytes, well inside a new account's free credit. --dry-run prints the exact cost.")
         return 2
 
     import databento as db

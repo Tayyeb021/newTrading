@@ -5,7 +5,7 @@ re-testing a dead idea in six months having forgotten, and it is the **honest
 trial count** that the deflated Sharpe ratio needs. Without that count, no result
 here is interpretable.
 
-**Running trial count: 30** (18 backtest configurations + 8 gauntlet variants,
+**Running trial count: 134** (18 backtest configurations + 8 gauntlet variants,
 plus the diagnostics below, which test the same hypotheses rather than new ones).
 
 ---
@@ -109,3 +109,48 @@ Equal-weight portfolio of all four: Sharpe **-0.71**.
 Two strategy families, 30 configurations, zero survivors. Simple technical rules
 on these four instruments at retail costs have now been tested at M5, M15, M30
 and D1 with two different signal families. Stop testing indicator rules here.
+
+---
+
+## 003 — Signal screen, 104 hypotheses — **5 survivors, all artifacts**
+
+*Tested 2026-09-05. `research/screen.py`. Drift-removed forward returns in ATR
+units, non-overlapping windows, Bonferroni at 104 trials (|t| > 3.49), and
+positive in >= 70% of years.*
+
+Eighteen structural hypotheses across four instruments, plus 24 hour-of-day
+tests on EURUSD and gold. Everything with a reason to exist: calendar effects,
+reversal and momentum at four horizons, range expansion and compression, the US
+open both ways, the overnight index drift, the London open, the Asian range
+break, gold versus the dollar, gold as a haven.
+
+**Every structural hypothesis died.** The only survivors were five hour-of-day
+effects, all in the 20:00-02:00 UTC block -- the rollover and the dead zone
+after it. EURUSD hour_21 had t = 5.62 across 13 of 17 years. It looked real.
+
+### Why it is not (`research/verify_hour_effect.py`)
+
+| Check | EURUSD | XAUUSD |
+|---|---|---|
+| Spread at the signal hour (ticks) | **41-73 pts** vs 5 normally; the edge is ~4 pts | market **closed** 21:00-22:00; reopens at 10 pts |
+| Bid-bar signature | hour_20 gap -0.049, hour_21 intrabar +0.063: a V around rollover summing to ~0 | thin hour_21 (n=1959 vs 2700): it is the reopening bar |
+| Where in the hour (M5) | concentrated in the **:00 and :55 slots** at bar boundaries, ~0 mid-hour | **one slot, 21:55, carries +388 of +408** -- the reopening gap |
+
+The spread blows out into rollover, bars close on the bid, the close dips and
+"recovers" when the spread normalises. No mid-price moved. On gold it is the
+gap across a closed hour. Neither is capturable: the spread at the exact moment
+of the signal is eight to fifteen times the edge.
+
+### Verdict
+Three families, 134 trials, zero tradeable survivors. The funnel worked exactly
+as designed: the screen surfaced candidates in a minute and the cost check
+killed them in the next. Rollover hours are now excluded from the screen by
+default so it cannot rediscover this.
+
+### What a pro would conclude
+Simple signals on OHLC bars of the four most liquid instruments on earth do not
+survive costs, multiple testing and replication at retail. That is the
+literature's answer as well. The published momentum and carry results are
+**cross-sectional portfolios** -- rank many instruments, long the top, short the
+bottom -- not single-instrument timing. This account offers 7,391 symbols and
+four have been used. That is the one structural avenue left untested.

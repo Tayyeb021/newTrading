@@ -115,7 +115,9 @@ def _run(adapter, args, profile, report: Report) -> int:
         return 1
 
     is_demo = int(info.trade_mode) == int(mt5.ACCOUNT_TRADE_MODE_DEMO)
-    mode = {0: "REAL", 1: "DEMO", 2: "CONTEST"}.get(int(info.trade_mode), "UNKNOWN")
+    # MT5: ACCOUNT_TRADE_MODE_DEMO=0, CONTEST=1, REAL=2. The first version had this
+    # map backwards; the guard below always used the constant and was correct.
+    mode = {0: "DEMO", 1: "CONTEST", 2: "REAL"}.get(int(info.trade_mode), "UNKNOWN")
     report.add(
         "account is demo",
         is_demo or args.allow_live,

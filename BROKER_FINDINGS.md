@@ -19,7 +19,8 @@ Everything here is **measured from the live terminal**, not assumed. Re-run
 | Balance | 103,391.20 USD |
 | Leverage | 1:5000 |
 | Symbols | 7,391 |
-| Algo trading | **disabled** - enable it in the terminal before anything can execute |
+| Trade mode | DEMO (`trade_mode=0`) |
+| Algo trading | **enabled** 2026-09-05 |
 
 ## Specs and measured spreads
 

@@ -26,10 +26,10 @@ model, and the demo forward test.
 ## Layout
 
 ```
-core/        domain types, config loading, Sleeve
+core/        domain types, config loading, Sleeve, futures contract calendar
 execution/   ExecutionAdapter protocol, MT5 + paper adapters
 risk/        sizing, limits register, the risk gate
-data/        Parquet bar store, validation, gap analysis, downloader
+data/        Parquet bar store, validation, gap analysis, downloader, continuous futures, CFTC COT
 features/    causal indicators - ATR, EMA, momentum, Donchian
 strategies/  S1 trend baseline, buy-and-hold control
 backtest/    engine, cost model, metrics, PORTFOLIO (many sleeves, one book)
@@ -374,3 +374,39 @@ One interaction to know: the profile's `max_concurrent_positions` was written
 for a single strategy. A book of S sleeves over K symbols can want S×K
 positions, and the default cap of 3 starved the allocator before it did
 anything — 4,603 rejections in the first run. Size it for the book.
+
+## Futures
+
+The CFD side proved its universe empty. The futures side is the same machine
+pointed at exchange-cleared micro contracts, which is where the research says an
+edge can exist. Everything above the execution adapter is unchanged.
+
+| Piece | File | Proven by |
+|---|---|---|
+| Contract calendar, expiry rules, front month, roll dates | `core/contracts.py` | dates checked against CME/COMEX/NYMEX rules |
+| Back-adjusted continuous series, roll log, roll cost | `data/continuous.py` | no jump at the roll; returns preserved |
+| IB adapter: front-month resolution, child stops, roll | `execution/ib_adapter.py` | 12-step round trip on the test double |
+| IB test double | `execution/ib_fake.py` | — |
+| CFTC positioning, joined at *publication* time | `data/cot.py` | look-ahead test; 11 years of real data downloaded |
+| Order-flow features from trade prints | `features/orderflow.py` | delta arithmetic |
+| Futures cost model: commission, ticks, **no swap** | `CostModel.for_futures` | — |
+
+```bash
+python scripts/verify_roundtrip_ib.py --fake          # the whole path, no broker
+python scripts/backtest_futures.py --synthetic        # stitch -> portfolio engine, no data
+python scripts/download_cot.py --years 15             # free, real
+python research/cot_screen.py                         # positioning as a signal
+set DATABENTO_API_KEY=db-... && python scripts/download_databento.py --roots MES MGC
+python scripts/verify_roundtrip_ib.py                 # against TWS paper (port 7497), dry run
+```
+
+Two rules the futures side adds. **A symbol is a root, not a contract**: the
+strategy says `MES`, the adapter resolves the live month and rolls before
+expiry, journaling the roll. **Stops are child orders at the exchange**: a
+position's stop is found by joining to its child order, and attribution falls
+back to the broker's own order records so it survives a restart — the lost-reply
+double-fill this exposed is now a regression test.
+
+What still needs your credentials: a Databento key for per-expiry history, and
+TWS or IB Gateway running with API access for the live dry run. Neither has a
+placeholder fallback; both refuse and explain.

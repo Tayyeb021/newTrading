@@ -1,0 +1,46 @@
+# Futures book configuration.
+#
+# The universe is the micro contracts a small account can actually trade:
+# exchange-cleared, no financing, ~$1 a side, $50-500 intraday margin. Contract
+# specs live in core/contracts.py (MICRO_UNIVERSE) and are verified against the
+# exchange on connect; a mismatch logs loudly and the exchange's numbers win.
+
+broker:
+  kind: ib
+  host: 127.0.0.1
+  port: 7497          # TWS paper. Live TWS 7496; IB Gateway paper 4002, live 4001.
+  client_id: 7
+
+# Order of preference from the gap analysis. MES and MGC are the core; M6E and
+# one of MCL / ZN make the book multi-asset, which is the published momentum
+# construction. MES and MNQ are one bucket, not two.
+universe:
+  - MES
+  - MGC
+  - M6E
+  - MCL
+
+active:
+  - MES
+  - MGC
+
+# Roll this many business days before last trade. Holidays are not modelled in
+# the calendar, so the buffer is deliberately wider than strictly necessary.
+roll_days_before:
+  MES: 5
+  MNQ: 5
+  MGC: 7
+  M6E: 5
+  MCL: 5
+  ZN: 10
+
+# Data. Databento serves CME/COMEX/NYMEX/CBOT with one API for history and
+# live. Key goes in the DATABENTO_API_KEY environment variable, never here.
+databento:
+  dataset: GLBX.MDP3
+  schemas: [ohlcv-1m, ohlcv-1d, trades]
+
+# CFTC Commitments of Traders, free. Micro roots map to their parent market.
+cot:
+  markets: [GC, ES, NQ, 6E, CL]
+  years_back: 15

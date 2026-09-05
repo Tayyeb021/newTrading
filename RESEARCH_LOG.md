@@ -5,7 +5,7 @@ re-testing a dead idea in six months having forgotten, and it is the **honest
 trial count** that the deflated Sharpe ratio needs. Without that count, no result
 here is interpretable.
 
-**Running trial count: 146** (18 backtest configurations + 8 gauntlet variants,
+**Running trial count: 170** (18 backtest configurations + 8 gauntlet variants,
 plus the diagnostics below, which test the same hypotheses rather than new ones).
 
 ---
@@ -231,3 +231,34 @@ this broker's tradeable universe, and none of it is there at retail costs.
   a G8 universe; check the pair list before believing a cross-section.
 - EURNZD carried exactly one corrupt bar (1999-08-18, low = 0.0). The store's
   validator refused the whole write rather than absorb it. Dropped and rewritten.
+
+---
+
+## 006 — CFTC positioning (COT) as a signal — **DEAD on GC, ES, 6E**
+
+*2026-09-05. `research/cot_screen.py`. Real CFTC legacy reports 2016-2026,
+557 weeks per market, joined to daily bars at PUBLICATION time (Friday 21:00
+UTC) so no bar sees a report before it existed. 24 trials, bar |t| > 3.08.*
+
+The first hypothesis class that is not a function of price. Four
+constructions from the literature - fade speculator extremes, follow the
+4-week change in speculative positioning, follow commercial hedgers at their
+extremes, fade the spec-vs-commercial gap - on gold, S&P and euro, at 5 and 20
+day horizons.
+
+Nothing approaches the bar. The nearest, fading crowded euro longs at 20 days,
+sits at t = -1.66 in 3 of 10 years - and the sign is the *opposite* of the
+hypothesis: crowded positions continued rather than reverted. On gold, every
+construction is negative or flat.
+
+This is Sanders (2004) rather than Wang (2001): no pervasive predictive power,
+and nothing that transfers between markets. The literature was split; on these
+three markets over this decade it splits toward nothing.
+
+Price proxy: IC Markets daily CFD for the same underlying. Sound for a
+signal-level test (demeaned returns, basis far inside one ATR); costs were not
+modelled by design. Nothing survived to need them.
+
+Data quality: the loader tracked the CFTC's own renames - ES in 2022, WTI in
+2023 - and NQ's e-mini row disappearing behind the micro row, which is now
+aliased. 11 years, 5 markets, 152,000 rows.

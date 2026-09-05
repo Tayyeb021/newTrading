@@ -279,6 +279,21 @@ class Runner:
 
         self.halted = any(b.severity in (Severity.HALT, Severity.FLATTEN) for b in breaches)
 
+        # 2b. futures: roll any position sitting in a contract past its roll date.
+        #     Done before evaluation so the strategy sees the new contract's bars.
+        if hasattr(self.adapter, "roll_due"):
+            for symbol in self.specs:
+                try:
+                    if self.adapter.roll_due(symbol):
+                        results = self.adapter.roll(symbol)
+                        self.journal.write("roll", symbol=symbol,
+                                           legs=[{"status": r.status.value, "fill": r.fill_price,
+                                                  "volume": r.filled_volume, "comment": r.request.comment}
+                                                 for r in results])
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("roll failed for %s: %s", symbol, exc)
+                    self.journal.write("roll_error", symbol=symbol, error=str(exc))
+
         # 3. strategy evaluation, only on a newly closed bar
         if not self.halted:
             for sleeve_name, symbol, strategy, tf in self.legs:

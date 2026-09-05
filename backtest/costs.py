@@ -186,6 +186,22 @@ class CostModel:
         self.calibrated = True
         return fitted
 
+    @classmethod
+    def for_futures(cls, roots: dict, spread_ticks: float = 1.0, slippage_ticks: float = 0.5) -> "CostModel":
+        """Futures costs from contract roots: spread and slippage in ticks,
+        commission per side all-in, and NO overnight financing. The absence of
+        swap is the single biggest cost difference from the CFD side."""
+        costs = {}
+        for name, r in roots.items():
+            costs[name] = SymbolCosts(
+                spread=spread_ticks * r.tick_size,
+                commission_per_lot_per_side=r.commission_per_side,
+                slippage=slippage_ticks * r.tick_size,
+                spread_multiple_at_open=2.0,
+                swap_long=0.0, swap_short=0.0,
+            )
+        return cls(costs=costs, calibrated=False)
+
     def stressed(self, factor: float) -> "CostModel":
         return CostModel(costs=dict(self.costs), calibrated=self.calibrated, stress=factor)
 

@@ -35,7 +35,7 @@ from core.types import (
     Tick,
 )
 from execution.base import ExecutionError
-from execution.brokertime import server_epoch_to_utc, verify_offset
+from execution.brokertime import ClockCheck, server_epoch_to_utc, verify_offset
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +96,8 @@ class MT5Adapter:
         self._spec_cache: dict[str, SymbolSpec] = {}
         #: Symbol used to probe the server clock on connect.
         self._clock_symbol = clock_symbol
+        self.clock_status = None
+        self.clock_message = ""
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -113,18 +115,16 @@ class MT5Adapter:
 
         # Verify the server timezone before anything reads a timestamp. A broker
         # changing its clock must stop the system, not silently shift a year of data.
-        probe = mt5.symbol_info_tick(self.broker_symbol(self._clock_symbol))
-        if probe is None:
-            for candidate in (s.name for s in (mt5.symbols_get() or [])[:50]):
-                mt5.symbol_select(candidate, True)
-                probe = mt5.symbol_info_tick(candidate)
-                if probe is not None and probe.time:
-                    break
+        clock = self.broker_symbol(self._clock_symbol)
+        mt5.symbol_select(clock, True)
+        probe = mt5.symbol_info_tick(clock)
         if probe is not None and probe.time:
-            ok, message = verify_offset(probe.time)
-            if not ok:
+            status, message = verify_offset(probe.time)
+            if status is ClockCheck.MISMATCH:
                 raise ExecutionError(message)
-            log.info(message)
+            (log.warning if status is ClockCheck.UNVERIFIABLE else log.info)(message)
+            self.clock_status = status
+            self.clock_message = message
         else:
             log.warning("could not verify the server clock - no tick available")
 

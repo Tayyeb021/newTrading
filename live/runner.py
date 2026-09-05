@@ -236,10 +236,21 @@ class Runner:
         self.risk.book.observe_equity(account.equity, today=now.date())
         positions = self.adapter.positions()
 
+        # Feed age from the freshest tick across every symbol. Without this the
+        # FeedHeartbeat limit sits in the register and can never fire, and the
+        # runner will happily evaluate Friday's prices all weekend. Found by
+        # running shadow mode on a closed market and watching halted stay False.
+        ticks = self._ticks()
+        feed_age = (
+            min((now - t.ts).total_seconds() for t in ticks.values())
+            if ticks else float("inf")
+        )
         state = self.risk.snapshot(
             equity=account.equity, balance=account.balance,
             margin_level=account.margin_level, positions=positions, now=now,
-            current_price=self._prices(), current_spread=self._spreads(),
+            current_price={s: t.mid for s, t in ticks.items()},
+            current_spread={s: t.spread for s, t in ticks.items()},
+            feed_age_seconds=feed_age,
         )
         breaches = self.risk.check_account(state)
         for breach in breaches:
@@ -274,6 +285,7 @@ class Runner:
             equity=account.equity, positions=len(positions),
             halted=self.halted, daily=state.daily_pnl_fraction,
             drawdown=state.drawdown_fraction(trailing=False),
+            feed_age_s=round(feed_age, 1) if feed_age != float("inf") else None,
         )
         self._persist()
 
@@ -335,20 +347,12 @@ class Runner:
 
     # ------------------------------------------------------------------ helpers
 
-    def _prices(self) -> dict[str, float]:
-        out: dict[str, float] = {}
+    def _ticks(self) -> dict:
+        """One tick per symbol, fetched once per iteration and shared."""
+        out = {}
         for symbol in self.specs:
             try:
-                out[symbol] = self.adapter.tick(symbol).mid
-            except Exception:  # noqa: BLE001
-                continue
-        return out
-
-    def _spreads(self) -> dict[str, float]:
-        out: dict[str, float] = {}
-        for symbol in self.specs:
-            try:
-                out[symbol] = self.adapter.tick(symbol).spread
+                out[symbol] = self.adapter.tick(symbol)
             except Exception:  # noqa: BLE001
                 continue
         return out

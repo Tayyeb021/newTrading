@@ -36,6 +36,7 @@ should stop the system rather than quietly corrupt a year of research.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from zoneinfo import ZoneInfo
 
 #: The exchange whose clock the server is pinned to.
@@ -80,25 +81,51 @@ def utc_to_server_naive(moment: datetime) -> datetime:
     return (utc + timedelta(hours=offset)).replace(tzinfo=None)
 
 
-def verify_offset(server_epoch: int | float, tolerance_minutes: int = 5) -> tuple[bool, str]:
+class ClockCheck(Enum):
+    VERIFIED = "verified"
+    MISMATCH = "mismatch"
+    UNVERIFIABLE = "unverifiable"
+
+
+def verify_offset(
+    server_epoch: int | float,
+    tolerance_minutes: int = 15,
+    stale_after_minutes: int = 30,
+) -> tuple[ClockCheck, str]:
     """Check the assumed offset against the live terminal.
 
-    Call this on connect. If a broker changes its server timezone, this is the
-    difference between finding out immediately and finding out after a year of
-    research built on shifted timestamps.
+    Three outcomes, and the third one matters. A stale tick and a changed server
+    timezone look identical from a single reading: both put the converted time
+    far from now. Treating "market closed" as a timezone error would block every
+    connect over a weekend, which is exactly what the first version did.
+
+    So a tick older than `stale_after_minutes` yields UNVERIFIABLE rather than
+    MISMATCH. The caller warns and continues; only a *fresh* tick that lands in
+    the wrong place is treated as a real timezone change and stops the system.
     """
     converted = server_epoch_to_utc(server_epoch)
     now = datetime.now(timezone.utc)
-    drift_minutes = abs((converted - now).total_seconds()) / 60.0
+    drift_minutes = (now - converted).total_seconds() / 60.0
 
     server_naive = datetime.fromtimestamp(server_epoch, tz=timezone.utc).replace(tzinfo=None)
     assumed = server_offset_hours(server_naive)
 
-    if drift_minutes <= tolerance_minutes:
-        return True, f"server clock is UTC+{assumed} as expected (drift {drift_minutes:.1f} min)"
+    if abs(drift_minutes) <= tolerance_minutes:
+        return ClockCheck.VERIFIED, (
+            f"server clock is UTC+{assumed} as expected (drift {drift_minutes:+.1f} min)"
+        )
+
+    # A quote from the past is an old quote, not a clock change. A quote from the
+    # FUTURE cannot be staleness, so that stays a mismatch.
+    if drift_minutes > stale_after_minutes:
+        return ClockCheck.UNVERIFIABLE, (
+            f"cannot verify the server clock: last tick is {drift_minutes / 60:.1f}h old "
+            f"({converted:%a %H:%M} UTC) - the market is closed. Assuming UTC+{assumed}. "
+            f"Re-check when trading resumes."
+        )
 
     actual = (server_naive - now.replace(tzinfo=None)).total_seconds() / 3600.0
-    return False, (
+    return ClockCheck.MISMATCH, (
         f"SERVER TIMEZONE MISMATCH: assumed UTC+{assumed}, measured UTC{actual:+.1f}. "
         f"Every stored timestamp would be wrong by {actual - assumed:+.1f}h. "
         f"Fix BROKER_ANCHOR_OFFSET_HOURS in execution/brokertime.py and re-download."

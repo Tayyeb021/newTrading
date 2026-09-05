@@ -327,6 +327,10 @@ def test_runner_start_reports_and_persists(adapter: PaperAdapter, tmp_path: Path
 
 def test_runner_places_a_trade_through_the_risk_engine(adapter: PaperAdapter, tmp_path: Path):
     _feed_bars(adapter)
+    # The fixture tick is stamped at the fixed NOW constant. Feed age is now
+    # checked against the real clock, so the happy path needs a fresh quote or
+    # FeedHeartbeat correctly halts it - which is a different test.
+    adapter.feed_tick(make_tick("EURUSD", 1.0800, 0.00010, datetime.now(timezone.utc)))
     runner = make_runner(adapter, tmp_path)
     runner.start()
     try:
@@ -390,3 +394,23 @@ def test_worker_survives_an_exception(tmp_path: Path):
         assert journal.read("worker_error")
     finally:
         worker.stop()
+
+
+def test_stale_feed_halts_the_runner(tmp_path: Path):
+    """Regression: the live loop never passed feed age to the risk snapshot, so
+    FeedHeartbeat could never fire. Shadow mode on a closed market showed the
+    runner evaluating 10-hour-old prices with halted=False."""
+    a = PaperAdapter(FIXTURE_SPECS)
+    a.connect()
+    a.feed_tick(make_tick("EURUSD", 1.08, 0.0001, NOW - timedelta(hours=10)))
+    _feed_bars(a)
+    runner = make_runner(a, tmp_path)
+    runner.start()
+    try:
+        runner.tick()
+        assert runner.halted, "a 10-hour-stale feed did not halt the runner"
+        assert any(b["limit"] == "feed_heartbeat" for b in runner.journal.read("breach"))
+        beats = runner.journal.read("heartbeat")
+        assert beats and beats[-1]["feed_age_s"] > 30_000
+    finally:
+        runner.shutdown()

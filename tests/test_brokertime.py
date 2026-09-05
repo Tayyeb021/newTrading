@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from execution.brokertime import (  # noqa: E402
+    ClockCheck,
     server_epoch_to_utc,
     server_offset_hours,
     utc_to_server_naive,
@@ -90,18 +91,31 @@ def test_all_conversions_are_timezone_aware():
     assert ts.tzinfo is not None and ts.utcoffset() == timedelta(0)
 
 
+def _server_epoch_for(moment: datetime) -> float:
+    offset = server_offset_hours(moment.replace(tzinfo=None))
+    return (moment + timedelta(hours=offset)).replace(tzinfo=timezone.utc).timestamp()
+
+
 def test_verify_offset_accepts_a_correct_clock():
-    now = datetime.now(timezone.utc)
-    offset = server_offset_hours(now.replace(tzinfo=None))
-    fake = (now + timedelta(hours=offset)).replace(tzinfo=timezone.utc).timestamp()
-    ok, message = verify_offset(fake)
-    assert ok, message
+    status, message = verify_offset(_server_epoch_for(datetime.now(timezone.utc)))
+    assert status is ClockCheck.VERIFIED, message
 
 
-def test_verify_offset_rejects_a_changed_clock():
-    """A broker moving its server timezone must stop the system, not corrupt it."""
-    now = datetime.now(timezone.utc)
-    wrong = (now + timedelta(hours=1)).replace(tzinfo=timezone.utc).timestamp()
-    ok, message = verify_offset(wrong)
-    assert not ok
+def test_verify_offset_rejects_a_clock_running_ahead():
+    """A tick from the FUTURE cannot be staleness, so it is a real mismatch."""
+    ahead = _server_epoch_for(datetime.now(timezone.utc) + timedelta(hours=2))
+    status, message = verify_offset(ahead)
+    assert status is ClockCheck.MISMATCH
     assert "MISMATCH" in message
+
+
+def test_a_stale_tick_is_unverifiable_not_a_mismatch():
+    """Regression: the first version failed every connect over a weekend.
+
+    A closed market and a changed server timezone look identical from one
+    reading. Treating the first as the second blocks the system every Saturday.
+    """
+    friday_close = _server_epoch_for(datetime.now(timezone.utc) - timedelta(hours=10))
+    status, message = verify_offset(friday_close)
+    assert status is ClockCheck.UNVERIFIABLE, message
+    assert "market is closed" in message

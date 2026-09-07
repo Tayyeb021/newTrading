@@ -136,11 +136,20 @@ class FakeIB:
 
     # ------------------------------------------------------------- contracts
 
-    def make_future(self, root, month, exchange, currency) -> _Contract:
-        r = self.roots[root]
-        return _Contract(root, month, exchange, currency, multiplier=str(r.multiplier), conId=hash((root, month)) & 0xFFFF)
+    def qualifyContracts(self, c) -> list:
+        """Fill in what the exchange knows, as real qualification does.
 
-    def qualifyContracts(self, c: _Contract) -> list[_Contract]:
+        The caller hands us a bare `ib_async.Future` with `multiplier=''` and
+        `conId=0`; IB answers with those populated. The fake used to hand back
+        its own contract type from a `make_future` factory that the real client
+        has never had, which is how `make_market_order` survived undetected
+        until the first live order.
+        """
+        r = self.roots[c.symbol]
+        c.multiplier = str(r.multiplier)
+        c.conId = hash((c.symbol, c.lastTradeDateOrContractMonth)) & 0xFFFF
+        if not getattr(c, "localSymbol", ""):
+            c.localSymbol = c.symbol
         return [c]
 
     def reqContractDetails(self, c: _Contract) -> list[_Details]:
@@ -182,13 +191,12 @@ class FakeIB:
 
     # ---------------------------------------------------------------- orders
 
-    def make_market_order(self, action: str, qty: int) -> _Order:
-        return _Order(action, qty, "MKT", next(self._ids))
-
-    def make_stop_order(self, action: str, qty: int, stop: float) -> _Order:
-        return _Order(action, qty, "STP", next(self._ids), auxPrice=stop)
-
-    def placeOrder(self, c: _Contract, o: _Order) -> _Trade:
+    def placeOrder(self, c, o) -> _Trade:
+        # A real order arrives with orderId 0 until the client assigns one, which
+        # is what IB does on placement. Assign here so the adapter can register
+        # the ticket immediately, exactly as it does against the real API.
+        if not getattr(o, "orderId", 0):
+            o.orderId = next(self._ids)
         existing = next((t for t in self._trades if t.order.orderId == o.orderId), None)
         if existing is not None:
             existing.order = o  # modify

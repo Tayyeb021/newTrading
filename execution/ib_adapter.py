@@ -147,12 +147,8 @@ class IBAdapter:
         key = f"{symbol}:{r.ib_month(year, mon)}"
         if key in self._contracts:
             return self._contracts[key]
-        ib_async = _import_ib() if self._ib.__class__.__name__ != "FakeIB" else None
-        if ib_async is not None:
-            c = ib_async.Future(symbol=r.root, lastTradeDateOrContractMonth=r.ib_month(year, mon),
+        c = _import_ib().Future(symbol=r.root, lastTradeDateOrContractMonth=r.ib_month(year, mon),
                                 exchange=r.exchange, currency=r.currency)
-        else:
-            c = self._ib.make_future(r.root, r.ib_month(year, mon), r.exchange, r.currency)
         qualified = self.ib.qualifyContracts(c)
         if not qualified:
             raise ExecutionError(f"IB could not qualify {key}")
@@ -205,6 +201,18 @@ class IBAdapter:
     #: type 1 with error 354, which is a subscription problem wearing the
     #: costume of a broken quote.
     LIVE, DELAYED, DELAYED_FROZEN = 1, 3, 4
+
+    @staticmethod
+    def market_order(action: str, qty: int):
+        """`ib_async.MarketOrder`. Built here, not on the client, because the
+        client has no such factory - an earlier version called
+        `ib.make_market_order`, which existed only on the test double and blew
+        up the first time it met the real library."""
+        return _import_ib().MarketOrder(action, qty)
+
+    @staticmethod
+    def stop_order(action: str, qty: int, stop_price: float):
+        return _import_ib().StopOrder(action, qty, stop_price)
 
     def _quote_once(self, contract, data_type: int, wait: float):
         self.ib.reqMarketDataType(data_type)
@@ -301,14 +309,14 @@ class IBAdapter:
         reference = tick.ask if request.side is Side.BUY else tick.bid
         action = "BUY" if request.side is Side.BUY else "SELL"
 
-        parent = self.ib.make_market_order(action, qty)
+        parent = self.market_order(action, qty)
         parent.orderRef = request.comment[:31]
         parent.transmit = request.stop_loss is None
         trade = self.ib.placeOrder(c, parent)
 
         stop_order = None
         if request.stop_loss is not None:
-            stop_order = self.ib.make_stop_order("SELL" if action == "BUY" else "BUY", qty, request.stop_loss)
+            stop_order = self.stop_order("SELL" if action == "BUY" else "BUY", qty, request.stop_loss)
             stop_order.parentId = parent.orderId
             stop_order.orderRef = request.comment[:31]
             stop_order.transmit = True
@@ -362,7 +370,7 @@ class IBAdapter:
         c = self.contract(symbol)
         tick = self.tick(symbol)
         reference = tick.bid if side is Side.BUY else tick.ask
-        order = self.ib.make_market_order("SELL" if side is Side.BUY else "BUY", qty)
+        order = self.market_order("SELL" if side is Side.BUY else "BUY", qty)
         order.orderRef = "close"
         trade = self.ib.placeOrder(c, order)
         deadline = time.time() + self.fill_timeout
@@ -416,7 +424,7 @@ class IBAdapter:
             old_c = self.contract(symbol, old)
             if ticket is not None and self._orders[ticket]["stop"] is not None:
                 self.ib.cancelOrder(self._orders[ticket]["stop"])
-            closing = self.ib.make_market_order("SELL" if side is Side.BUY else "BUY", qty)
+            closing = self.market_order("SELL" if side is Side.BUY else "BUY", qty)
             closing.orderRef = "roll-close"
             t1 = self.ib.placeOrder(old_c, closing)
             self.ib.sleep(0.25)

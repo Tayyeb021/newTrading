@@ -111,6 +111,11 @@ class FakeIB:
         self._positions: dict[str, _Position] = {}  # key: symbol:month
         self.history: dict[str, list[_HistBar]] = {}
         self.fail_next_fill = False  # simulate a lost reply
+        self.market_data_type = 1
+        #: None means every entitlement works. A set (e.g. {3, 4}) reproduces an
+        #: account with no live subscription, which answers NaN rather than an
+        #: error - the shape of a real free-trial account.
+        self.entitled_types: set[int] | None = None
 
     # --------------------------------------------------------------- session
 
@@ -159,7 +164,16 @@ class FakeIB:
         half = self.roots[symbol].tick_size * self.spread_ticks / 2
         return mid - half, mid + half
 
+    def reqMarketDataType(self, data_type: int) -> None:
+        """Record the entitlement asked for. `entitled_types`, when set, is the
+        set this fake account is allowed - so a test can reproduce a free-trial
+        account that has no live data and answers NaN on type 1."""
+        self.market_data_type = int(data_type)
+
     def reqMktData(self, c: _Contract, generic="", snapshot=True, regulatory=False) -> _Ticker:
+        if self.entitled_types is not None and self.market_data_type not in self.entitled_types:
+            nan = float("nan")
+            return _Ticker(nan, nan, nan, nan, self.now)
         bid, ask = self._quote(c.symbol)
         return _Ticker(bid, ask, self.prices[c.symbol], self.prices[c.symbol], self.now)
 

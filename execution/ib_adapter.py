@@ -87,6 +87,10 @@ class IBAdapter:
         self._spec_cache: dict[str, SymbolSpec] = {}
         self._orders: dict[int, dict] = {}  # ticket -> {symbol, side, stop_order}
         self.clock_message = ""
+        #: Which entitlement actually answered: 1 live, 3 delayed, 4 delayed
+        #: frozen. None until the first quote. Anything but 1 means prices are
+        #: 10-15 minutes old and may not be used to measure execution quality.
+        self.market_data_type: int | None = None
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -195,20 +199,51 @@ class IBAdapter:
         self._spec_cache[symbol] = spec
         return spec
 
-    def tick(self, symbol: str) -> Tick:
-        c = self.contract(symbol)
-        t = self.ib.reqMktData(c, "", True, False)
-        self.ib.sleep(0.5)
+    #: IB market data types. 1 is the live subscription; 3 is the delayed feed
+    #: every account gets for free; 4 is the last delayed value when the market
+    #: is shut. A free-trial account has no live entitlement and returns NaN on
+    #: type 1 with error 354, which is a subscription problem wearing the
+    #: costume of a broken quote.
+    LIVE, DELAYED, DELAYED_FROZEN = 1, 3, 4
+
+    def _quote_once(self, contract, data_type: int, wait: float):
+        self.ib.reqMarketDataType(data_type)
+        t = self.ib.reqMktData(contract, "", True, False)
+        self.ib.sleep(wait)
         bid, ask = float(t.bid or 0), float(t.ask or 0)
-        if bid <= 0 or ask <= 0:
-            last = float(t.last or t.close or 0)
-            if last <= 0:
-                raise ExecutionError(f"no quote for {symbol}")
-            bid = ask = last
-        ts = t.time if getattr(t, "time", None) else datetime.now(timezone.utc)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        return Tick(symbol=symbol, ts=ts, bid=bid, ask=ask)
+        if bid > 0 and ask > 0:
+            return bid, ask, t
+        last = float(t.last or t.close or 0)
+        if last > 0:
+            return last, last, t  # delayed feeds often carry only a last price
+        return 0.0, 0.0, t
+
+    def tick(self, symbol: str) -> Tick:
+        """Best quote available, falling back through the entitlement ladder.
+
+        Live first, because a real subscription is what production uses. On an
+        account without one, IB answers with NaN rather than an error the client
+        can catch, so the fallback is by value, not by exception. Whichever type
+        answered is recorded in `market_data_type` and the tick's staleness is
+        the caller's to judge - a delayed quote is fine for verifying a code
+        path and useless for measuring a fill.
+        """
+        c = self.contract(symbol)
+        for data_type, wait in ((self.LIVE, 0.5), (self.DELAYED, 2.0), (self.DELAYED_FROZEN, 2.0)):
+            if self.market_data_type is not None and data_type < self.market_data_type:
+                continue  # a previous call already established there is no entitlement
+            bid, ask, _ = self._quote_once(c, data_type, wait)
+            if bid > 0 and ask > 0:
+                if self.market_data_type != data_type:
+                    self.market_data_type = data_type
+                    log.info("%s: market data type %d (%s)", symbol, data_type,
+                             {1: "live", 3: "delayed", 4: "delayed frozen"}[data_type])
+                ts = datetime.now(timezone.utc)
+                return Tick(symbol=symbol, ts=ts, bid=bid, ask=ask)
+        raise ExecutionError(
+            f"no quote for {symbol} on live, delayed or frozen data. The contract may "
+            f"not be trading, or the account has no entitlement at all."
+        )
 
     def bars(self, symbol: str, timeframe: str, count: int, end: datetime | None = None) -> list[Bar]:
         if timeframe not in BAR_SIZE:

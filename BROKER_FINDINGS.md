@@ -128,3 +128,43 @@ not a cost model, and the commission figure needs verifying separately.
 
 None of this touches entries 007-013: those run on `CostModel.for_futures`,
 priced from exchange tick sizes and per-side commission, not from these CFDs.
+
+---
+
+## Interactive Brokers: two order-term defaults that would have cost money (2026-09-07)
+
+First contact with a real IB paper account (DUT097699, free trial) found three
+bugs in three attempts. The first two were mine; the third is IB's defaults
+meeting a strategy that holds overnight.
+
+**1. The test double invented API.** `make_market_order`, `make_stop_order` and
+`make_future` existed only on `FakeIB`. Twelve green checks had validated a
+fiction. Now the adapter builds orders from `ib_async` itself and
+`tests/test_ib_conformance.py` walks its AST to assert every client call exists
+on the real class.
+
+**2. No live market data on a free trial.** IB answers `reqMktData` with NaN and
+reports error 354 asynchronously, so the failure arrives as arithmetic, not an
+exception, and NaN propagated into the stop distance. The adapter now walks the
+entitlement ladder by value (live, delayed, delayed-frozen) and records which
+answered, so nothing measures execution quality from a 15-minute-old price.
+
+**3. Error 10349: TIF set to DAY, both orders cancelled.** `ib_async` leaves
+`tif` empty and `outsideRth` False; IB's preset filled in DAY. Two faults:
+
+- *Visible:* at 04:35 New York every order is refused, because IB's "regular
+  trading hours" are 09:30-16:15 while MES trades nearly around the clock.
+- *Invisible, and the serious one:* **a protective stop with DAY time-in-force
+  is cancelled at the session close.** Every strategy here holds overnight and
+  the monthly rules hold for a month. The position would wake up unprotected
+  while the risk engine still believed a stop was attached, and every aggregate
+  risk figure computed from stops would be wrong. `UnstoppedPosition` would not
+  catch it, because the position *did* have a stop when it was last checked.
+
+Entries are now DAY + outsideRth; protective stops are **GTC + outsideRth**, and
+`tests/test_ib_order_terms.py` asserts it at the factory, through the full submit
+path, and after a stop modification.
+
+Note this is specific to IB's separate child-stop model. On MT5 the stop is a
+field on the position itself and cannot expire, which is why the CFD side never
+showed this.

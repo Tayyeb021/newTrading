@@ -204,15 +204,34 @@ class IBAdapter:
 
     @staticmethod
     def market_order(action: str, qty: int):
-        """`ib_async.MarketOrder`. Built here, not on the client, because the
-        client has no such factory - an earlier version called
-        `ib.make_market_order`, which existed only on the test double and blew
-        up the first time it met the real library."""
-        return _import_ib().MarketOrder(action, qty)
+        """`ib_async.MarketOrder`, explicitly routed and timed.
+
+        Built here, not on the client, because the client has no such factory -
+        an earlier version called `ib.make_market_order`, which existed only on
+        the test double and blew up the first time it met the real library.
+
+        `outsideRth=True` because a CME equity-index future trades nearly around
+        the clock while IB's "regular trading hours" are 09:30-16:15 New York.
+        Left at the default of False, every order this system sends outside that
+        window is refused in a market that is plainly open - which is what
+        happened at 04:35 New York on 2026-09-07, error 10349.
+        """
+        return _import_ib().MarketOrder(action, qty, tif="DAY", outsideRth=True)
 
     @staticmethod
     def stop_order(action: str, qty: int, stop_price: float):
-        return _import_ib().StopOrder(action, qty, stop_price)
+        """A protective stop, GOOD TILL CANCELLED and valid outside regular hours.
+
+        This is a risk control, not a trading preference. `ib_async` leaves
+        `tif` empty and IB's order preset fills in DAY, so the stop would be
+        **cancelled at the end of the session**. Every strategy here holds
+        overnight - the monthly rules hold for a month - so the position would
+        wake up unprotected while the risk engine still believed a stop was
+        attached, and every aggregate risk number computed from stops would be
+        quietly wrong. `UnstoppedPosition` would not catch it either: the
+        position did have a stop when it was last checked.
+        """
+        return _import_ib().StopOrder(action, qty, stop_price, tif="GTC", outsideRth=True)
 
     def _quote_once(self, contract, data_type: int, wait: float):
         self.ib.reqMarketDataType(data_type)

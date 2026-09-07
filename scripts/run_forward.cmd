@@ -9,6 +9,14 @@ rem Requires IB Gateway running and logged in on port 4002, in this Windows
 rem session. IB forces a daily re-login, so if the record shows a gap that is
 rem almost always why. Disconnect RDP, do not sign out.
 rem
+rem Self-healing: the scheduled task re-fires every 15 minutes with
+rem MultipleInstances=IgnoreNew, so a running instance is left alone and a dead
+rem one is replaced. This exists because on 2026-09-07 the first run was killed
+rem by a console interrupt (exit 3221225786, STATUS_CONTROL_C_EXIT) after eleven
+rem hours, and Task Scheduler's "restart on failure" does NOT fire on a
+rem non-zero exit code - only on a failure to start. Eleven hours of record were
+rem lost before anyone noticed.
+rem
 rem Stop it:   create  state\FORWARD_KILL   (the runner halts and stays halted)
 rem            or  schtasks /End /TN TradingForwardRecord
 rem Watch it:  state\forward_record.log

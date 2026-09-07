@@ -6,6 +6,14 @@ rem open, 2026-09-06 21:00 UTC, and runs until the Friday close, 2026-09-11
 rem 21:00 UTC. The end is an absolute time so that if the task restarts a
 rem crashed run, the restart still ends at the close instead of running on.
 rem
+rem Self-healing: the scheduled task re-fires every 15 minutes with
+rem MultipleInstances=IgnoreNew, so a running instance is left alone and a dead
+rem one is replaced. This exists because on 2026-09-07 the first run was killed
+rem by a console interrupt (exit 3221225786, STATUS_CONTROL_C_EXIT) after eleven
+rem hours, and Task Scheduler's "restart on failure" does NOT fire on a
+rem non-zero exit code - only on a failure to start. Eleven hours of record were
+rem lost before anyone noticed.
+rem
 rem Stop it early:   create the file  state\SHADOW_KILL   (the runner halts and
 rem                  refuses every trade until the file is removed), or end the
 rem                  task:  schtasks /End /TN TradingShadowWeek

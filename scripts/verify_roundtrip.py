@@ -1,4 +1,4 @@
-"""Phase 1 gate: open, modify and close one real order end to end.
+"""Phase 1 gate: open, modify and close real orders end to end.
 
 This is the last thing standing between the foundation and a working system. It
 places an actual order at the broker's minimum lot, moves its stop, closes it, and
@@ -6,19 +6,29 @@ verifies the account is flat afterwards. Along the way it measures the numbers y
 will otherwise be guessing at for months: real fill latency, real slippage, and
 whether stop modification actually takes.
 
-    python scripts/verify_roundtrip.py --symbol EURUSD
-    python scripts/verify_roundtrip.py --symbol EURUSD --dry-run   # no order sent
+    python scripts/verify_roundtrip.py                             # every active instrument
+    python scripts/verify_roundtrip.py --symbols EURUSD XAUUSD
+    python scripts/verify_roundtrip.py --all                       # every configured instrument
+    python scripts/verify_roundtrip.py --dry-run                   # no order sent
+
+Each measured round trip is appended to `config/measured_fills.json`, which
+`CostModel.calibrate()` reads. That file is the whole point of the exercise: until
+it exists every backtest in this repository runs on an ASSUMED half-spread of
+slippage, and `calibrated=False` is printed on every report to say so.
 
 SAFETY. The script refuses to run on anything other than a demo account. That is
 not a formality — it opens a position, and a bug in the close path leaves it open.
-Run it on demo, read the report, and only then decide anything about real money.
-The `--allow-live` flag exists because you will eventually want to measure live
-execution, and when you use it you should have read this file first.
+Each symbol is traded one at a time and closed before the next begins, so at most
+one position exists at any moment. Run it on demo, read the report, and only then
+decide anything about real money. The `--allow-live` flag exists because you will
+eventually want to measure live execution, and when you use it you should have
+read this file first.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from dataclasses import dataclass, field
@@ -34,6 +44,29 @@ from risk.sizing import size_position  # noqa: E402
 
 PASS = "PASS"
 FAIL = "FAIL"
+MEASURED = Path(__file__).resolve().parent.parent / "config" / "measured_fills.json"
+
+
+def record_fill(symbol: str, entry_spread: float, entry_slip: float, exit_slip: float,
+                path: Path = MEASURED) -> None:
+    """Append one measured round trip, in the shape `CostModel.calibrate` reads.
+
+    Two observations per trip: the entry and the exit each crossed the spread and
+    each slipped. Both are kept - an exit under stress is the one that hurts, and
+    a median over one direction only would flatter the model.
+    """
+    store = {}
+    if path.exists():
+        try:
+            store = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            store = {}
+    fills = store.setdefault(symbol, [])
+    stamp = datetime.now(timezone.utc).isoformat()
+    fills.append({"ts": stamp, "spread": entry_spread, "slippage": entry_slip, "leg": "entry"})
+    fills.append({"ts": stamp, "spread": entry_spread, "slippage": exit_slip, "leg": "exit"})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(store, indent=2, sort_keys=True), encoding="utf-8")
 
 
 @dataclass
@@ -72,7 +105,10 @@ def timed(fn):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--symbol", default="EURUSD")
+    ap.add_argument("--symbols", nargs="+", default=None,
+                    help="instruments to verify; default is the active list in instruments.yaml")
+    ap.add_argument("--symbol", default=None, help="one instrument (kept for older invocations)")
+    ap.add_argument("--all", action="store_true", help="every instrument in instruments.yaml, not just the active ones")
     ap.add_argument("--profile", default="challenge")
     ap.add_argument("--dry-run", action="store_true", help="check everything, send nothing")
     ap.add_argument("--allow-live", action="store_true", help="permit a non-demo account")
@@ -83,29 +119,72 @@ def main() -> int:
 
     instruments = InstrumentConfig.load()
     profile = RiskProfile.load(args.profile)
-    report = Report()
 
-    print(f"\nROUND TRIP VERIFICATION - {args.symbol}")
-    print(f"profile {profile.name}, {'DRY RUN' if args.dry_run else 'LIVE ORDER'}\n")
-
-    adapter = MT5Adapter(aliases=instruments.aliases)
-
-    # ---------------------------------------------------------------- connect
-    try:
-        _, ms = timed(adapter.connect)
-        report.add("connect to terminal", True, adapter.name, ms)
-    except Exception as exc:  # noqa: BLE001
-        report.add("connect to terminal", False, str(exc))
+    if args.symbol and args.symbols:
+        print("give --symbol or --symbols, not both")
+        return 1
+    symbols = args.symbols or ([args.symbol] if args.symbol else None)
+    if symbols is None:
+        symbols = list(instruments.symbols if args.all else instruments.active)
+    unknown = [s for s in symbols if s not in instruments.symbols]
+    if unknown:
+        print(f"unknown instruments {unknown}; configured: {', '.join(instruments.symbols)}")
         return 1
 
+    print(f"\nROUND TRIP VERIFICATION - {len(symbols)} instrument(s): {', '.join(symbols)}")
+    print(f"profile {profile.name}, {'DRY RUN - nothing is sent' if args.dry_run else 'LIVE ORDERS on a demo account'}")
+    print("one position at a time; each is closed before the next opens")
+
+    adapter = MT5Adapter(aliases=instruments.aliases)
+    connect = Report()
+    print()
     try:
-        return _run(adapter, args, profile, report)
+        _, ms = timed(adapter.connect)
+        connect.add("connect to terminal", True, adapter.name, ms)
+    except Exception as exc:  # noqa: BLE001
+        connect.add("connect to terminal", False, str(exc))
+        return 1
+
+    results: dict[str, tuple[bool, Report]] = {}
+    try:
+        for symbol in symbols:
+            report = Report()
+            print(f"\n{'=' * 78}\n{symbol}\n{'=' * 78}")
+            try:
+                code = _run(adapter, symbol, args, profile, report)
+            except Exception as exc:  # noqa: BLE001 - one bad instrument must not abort the rest
+                report.add("unhandled error", False, f"{type(exc).__name__}: {exc}")
+                code = 1
+            results[symbol] = (code == 0, report)
     finally:
         adapter.disconnect()
 
+    return _overall(results, args.dry_run)
 
-def _run(adapter, args, profile, report: Report) -> int:
-    symbol = args.symbol
+
+def _overall(results: dict, dry_run: bool) -> int:
+    print(f"\n{'=' * 78}\nSUMMARY\n{'=' * 78}")
+    for symbol, (ok, report) in results.items():
+        failed = [s.name for s in report.steps if not s.ok]
+        passed = sum(1 for s in report.steps if s.ok)
+        detail = "" if ok else "  failed: " + ", ".join(failed)
+        print(f"  [{PASS if ok else FAIL}] {symbol:<10}{passed}/{len(report.steps)} checks{detail}")
+
+    every = all(ok for ok, _ in results.values())
+    print()
+    if every and not dry_run:
+        print(f"  PHASE 1 GATE MET on {len(results)} instrument(s).")
+        print(f"  Measurements appended to {MEASURED.relative_to(MEASURED.parent.parent)}.")
+        print("  Next: python scripts/calibrate_costs.py   (turns them into the cost model)")
+    elif every:
+        print("  DRY RUN clean. Re-run without --dry-run to measure real fills.")
+    else:
+        print("  GATE NOT MET. See the failures above before trusting anything downstream.")
+    print()
+    return 0 if every else 1
+
+
+def _run(adapter, symbol: str, args, profile, report: Report) -> int:
     mt5 = adapter.mt5
 
     # ------------------------------------------------------------ safety gate
@@ -197,7 +276,6 @@ def _run(adapter, args, profile, report: Report) -> int:
             f"would buy {volume:g} {symbol} @ ~{entry_ref:.{spec.digits}f}, "
             f"sl {stop:.{spec.digits}f} tp {target:.{spec.digits}f}",
         )
-        _summary(report)
         return 0 if report.ok else 1
 
     # ------------------------------------------------------------------- open
@@ -273,9 +351,19 @@ def _run(adapter, args, profile, report: Report) -> int:
     remaining = [p for p in adapter.positions(symbol) if p.ticket == ticket]
     report.add("account is flat", not remaining, "no open position" if not remaining else "STILL OPEN")
 
+    # reconcile() unions expected with actual, so this checks the WHOLE account is
+    # flat, not just this symbol. That is what we want between instruments.
     drift = reconcile(adapter, {})
-    report.add("final reconciliation", not drift, "clean" if not drift else f"DRIFT {drift}")
+    report.add("account reconciles flat", not drift, "clean" if not drift else f"DRIFT {drift}")
 
+    # The measurement this whole script exists to take.
+    if result.ok and closed.ok:
+        record_fill(symbol, entry_spread=tick.spread, entry_slip=slip or 0.0, exit_slip=cslip or 0.0)
+        report.add(
+            "record measurement", True,
+            f"spread {tick.spread / spec.point:.1f} pts, entry slip {(slip or 0.0) / spec.point:+.1f}, "
+            f"exit slip {(cslip or 0.0) / spec.point:+.1f} -> {MEASURED.name}",
+        )
     _summary(report, spec, volume, stop_distance)
     return 0 if report.ok else 1
 
@@ -292,22 +380,13 @@ def _recent_atr(adapter, symbol: str, period: int) -> float:
 
 
 def _summary(report: Report, spec=None, volume: float = 0.0, stop_distance: float = 0.0) -> None:
-    print()
     passed = sum(1 for s in report.steps if s.ok)
-    print(f"  {passed}/{len(report.steps)} checks passed")
-
-    if report.ok:
-        print("\n  PHASE 1 GATE: round trip verified.")
-        if spec is not None and volume:
-            print(
-                f"  Real cost of this trade: "
-                f"{spec.risk_for(volume, stop_distance):,.2f} at risk on {volume:g} lots."
-            )
-        print("  Record the slippage figures above - they calibrate the backtest cost model.")
-    else:
-        failed = [s.name for s in report.steps if not s.ok]
-        print(f"\n  GATE NOT MET. Failed: {', '.join(failed)}")
-    print()
+    line = f"  {passed}/{len(report.steps)} checks passed"
+    if report.ok and spec is not None and volume:
+        line += f", {spec.risk_for(volume, stop_distance):,.2f} was at risk on {volume:g} lots"
+    if not report.ok:
+        line += " - FAILED: " + ", ".join(s.name for s in report.steps if not s.ok)
+    print(line)
 
 
 if __name__ == "__main__":

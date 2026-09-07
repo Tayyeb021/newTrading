@@ -851,3 +851,48 @@ Trials: 196. The AI layer stays in the codebase as what it is: a bounded
 filter that has now been shown, on real data and out of sample, to add
 nothing to the monthly trend rule. The arithmetic trades; the model waits
 for a reason to exist.
+
+---
+
+## Forward record — **STARTED 2026-09-07 09:04 UTC. Open-ended.**
+
+*`scripts/run_forward.py`, manifest in `state/forward_manifest.json`,
+journal in `state/forward_journal.jsonl`.*
+
+Thirteen entries and 196 trials produced nothing that passed its own declared
+thresholds. The best form, monthly time-series momentum across three speeds,
+reached net Sharpe 0.31 with carry against a 0.40 bar. The variant that looks
+better in hindsight - the 250-day speed alone, +$22M and PBO 0.00 - was chosen
+AFTER seeing the results and is therefore not licensed by that data. Only one
+honest test remains: run it forward on prices it has never seen.
+
+**The terms, declared now and fixed for the life of the record.**
+
+| | |
+|---|---|
+| markets | 13 tradeable micros: MES MNQ MYM M2K MGC SIL MHG M6E M6A M6B MCL MBT ZN |
+| sleeves | tsmom60, tsmom120, tsmom250 - the ensemble, not the winner |
+| cadence | first trading day of each month, held between decisions |
+| risk | 0.5% per trade, research profile |
+| execution | shadow: IB for prices, contracts, specs and account; fills simulated in-process, crossing the spread |
+| venue | IB paper DUT097699 via Gateway on 4002, delayed data |
+| first decision | **2026-10-01** - it was started mid-month and will do nothing until then, deliberately |
+
+**Why the ensemble and not the 250-day speed.** Because the ensemble is what
+entry 010 declared and tested. Running the speed that won in-sample would be
+the post-hoc choice this log has refused three times already. If the ensemble
+works forward, the speed question can be asked of the forward data later.
+
+**What would make this record void.** Changing any line of the table above
+while it runs. If a parameter needs to change, this record ends where it stands
+and a new one begins. The manifest exists to make that impossible to do quietly.
+
+**What it cannot show.** Real slippage. IB's paper server fills at the quote -
+eight legs, zero slippage, measured 2026-09-07 - and the in-process paper book
+is a model. Both charge costs; neither is a fill. Slippage is measurable only
+on a live account, and that is not a decision for now.
+
+Expectation, recorded in advance so it cannot be revised: net Sharpe near 0.3
+with a drawdown of 20-30% and long flat stretches, and roughly a one-in-three
+chance that the first twelve months are negative even if the edge is real. A
+year is a small sample of a slow strategy.

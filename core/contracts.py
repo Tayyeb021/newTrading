@@ -192,6 +192,22 @@ class FuturesRoot:
     #: None for cash-settled contracts and for those whose last trade precedes
     #: the delivery month (energy). Otherwise the roll anchors on this.
     first_notice_rule: str | None = None
+    #: What the broker calls this root, when that differs from the exchange's
+    #: own code. Interactive Brokers lists Micro Silver as "SI" - the same
+    #: symbol as the 5,000oz contract - and separates the two ONLY by
+    #: multiplier, so both must be sent. Found on 2026-09-07 when SIL was the
+    #: one root of thirteen that would not resolve.
+    broker_symbol: str = ""
+
+    @property
+    def ib_symbol(self) -> str:
+        return self.broker_symbol or self.root
+
+    @property
+    def ib_multiplier(self) -> str:
+        """IB wants '5', not '5.0'; a float-formatted multiplier fails to match."""
+        m = float(self.multiplier)
+        return str(int(m)) if m.is_integer() else str(m)
 
     @property
     def tick_value(self) -> float:
@@ -402,7 +418,9 @@ MICRO_UNIVERSE: dict[str, FuturesRoot] = {
     "MYM": _r("MYM", "CBOT", "Micro E-mini Dow", 0.5, 1.0, QUARTERLY, "third_friday", comm=0.85, margin=50.0, bucket="us_indices"),
     "M2K": _r("M2K", "CME", "Micro E-mini Russell 2000", 5.0, 0.10, QUARTERLY, "third_friday", comm=0.85, margin=50.0, bucket="us_indices"),
     "MGC": _r("MGC", "COMEX", "Micro Gold", 10.0, 0.10, (2, 4, 6, 8, 10, 12), "metals", roll=7, comm=1.00, margin=150.0, bucket="metals", fnd="prior_month_end"),
-    "SIL": _r("SIL", "COMEX", "Micro Silver", 1000.0, 0.005, (3, 5, 7, 9, 12), "metals", roll=7, comm=1.00, margin=200.0, bucket="metals", fnd="prior_month_end"),
+    "SIL": FuturesRoot("SIL", "COMEX", "Micro Silver", 1000.0, 0.005, (3, 5, 7, 9, 12), "metals",
+                       roll_days_before=7, commission_per_side=1.00, margin_day=200.0, bucket="metals",
+                       first_notice_rule="prior_month_end", broker_symbol="SI"),
     "MHG": _r("MHG", "COMEX", "Micro Copper", 2500.0, 0.0005, (3, 5, 7, 9, 12), "metals", roll=7, comm=1.00, margin=100.0, bucket="metals", fnd="prior_month_end"),
     "M6E": _r("M6E", "CME", "Micro EUR/USD", 12_500.0, 0.0001, QUARTERLY, "fx", comm=0.85, margin=100.0, bucket="usd_majors"),
     "M6A": _r("M6A", "CME", "Micro AUD/USD", 10_000.0, 0.0001, QUARTERLY, "fx", comm=0.85, margin=50.0, bucket="usd_majors"),

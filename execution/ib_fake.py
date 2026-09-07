@@ -136,6 +136,18 @@ class FakeIB:
 
     # ------------------------------------------------------------- contracts
 
+    def _root_for(self, symbol: str):
+        """Roots are keyed by our name; IB sees the broker's. Micro Silver is
+        "SIL" here and "SI" there, so a lookup by the contract's symbol must
+        fall back to the broker alias or the double diverges from production
+        again."""
+        if symbol in self.roots:
+            return self.roots[symbol]
+        for r in self.roots.values():
+            if r.ib_symbol == symbol:
+                return r
+        raise KeyError(symbol)
+
     def qualifyContracts(self, c) -> list:
         """Fill in what the exchange knows, as real qualification does.
 
@@ -145,7 +157,7 @@ class FakeIB:
         has never had, which is how `make_market_order` survived undetected
         until the first live order.
         """
-        r = self.roots[c.symbol]
+        r = self._root_for(c.symbol)
         c.multiplier = str(r.multiplier)
         c.conId = hash((c.symbol, c.lastTradeDateOrContractMonth)) & 0xFFFF
         if not getattr(c, "localSymbol", ""):
@@ -153,12 +165,12 @@ class FakeIB:
         return [c]
 
     def reqContractDetails(self, c: _Contract) -> list[_Details]:
-        return [_Details(c, self.roots[c.symbol].tick_size)]
+        return [_Details(c, self._root_for(c.symbol).tick_size)]
 
     # --------------------------------------------------------------- account
 
     def accountSummary(self) -> list[_Summary]:
-        margin = sum(abs(p.position) * self.roots[p.contract.symbol].margin_day for p in self._positions.values())
+        margin = sum(abs(p.position) * self._root_for(p.contract.symbol).margin_day for p in self._positions.values())
         return [
             _Summary("NetLiquidation", f"{self.equity:.2f}"),
             _Summary("TotalCashValue", f"{self.equity:.2f}"),
@@ -173,7 +185,7 @@ class FakeIB:
         ("MES:20261218") so a test can give two months different prices, which
         is what real futures do and what the roll's basis adjustment depends on."""
         mid = self.prices.get(f"{symbol}:{month}", self.prices[symbol]) if month else self.prices[symbol]
-        half = self.roots[symbol].tick_size * self.spread_ticks / 2
+        half = self._root_for(symbol).tick_size * self.spread_ticks / 2
         return mid - half, mid + half
 
     def reqMarketDataType(self, data_type: int) -> None:
@@ -223,7 +235,7 @@ class FakeIB:
         if record:
             key = f"{trade.contract.symbol}:{trade.contract.lastTradeDateOrContractMonth}"
             signed = trade.order.totalQuantity * (1 if trade.order.action == "BUY" else -1)
-            mult = self.roots[trade.contract.symbol].multiplier
+            mult = self._root_for(trade.contract.symbol).multiplier
             if key in self._positions:
                 p = self._positions[key]
                 new = p.position + signed

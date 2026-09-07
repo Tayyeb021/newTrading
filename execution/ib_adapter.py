@@ -147,11 +147,19 @@ class IBAdapter:
         key = f"{symbol}:{r.ib_month(year, mon)}"
         if key in self._contracts:
             return self._contracts[key]
-        c = _import_ib().Future(symbol=r.root, lastTradeDateOrContractMonth=r.ib_month(year, mon),
-                                exchange=r.exchange, currency=r.currency)
+        # Symbol AND multiplier. IB lists Micro Silver as "SI", the same symbol
+        # as the 5,000oz contract, and separates the two only by multiplier;
+        # sending the size is what makes a shared symbol unambiguous.
+        c = _import_ib().Future(symbol=r.ib_symbol, lastTradeDateOrContractMonth=r.ib_month(year, mon),
+                                exchange=r.exchange, currency=r.currency, multiplier=r.ib_multiplier)
         qualified = self.ib.qualifyContracts(c)
+        qualified = [q for q in qualified if q is not None]
         if not qualified:
-            raise ExecutionError(f"IB could not qualify {key}")
+            raise ExecutionError(
+                f"IB could not qualify {key} (sent symbol={r.ib_symbol!r} "
+                f"multiplier={r.ib_multiplier!r} on {r.exchange}). The contract may not "
+                f"list that month, or the broker uses a different symbol for this root."
+            )
         self._contracts[key] = qualified[0]
         return qualified[0]
 

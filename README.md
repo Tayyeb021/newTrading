@@ -523,26 +523,37 @@ double-fill this exposed is now a regression test.
 
 ### Interactive Brokers setup
 
-TWS is installed at `%LOCALAPPDATA%\Programs\tws\tws.exe` (offline build, its own
-bundled JRE, 490 MB, installed 2026-09-07 from Interactive Brokers' signed
-installer). It is the software only. Three things have to happen before the
-futures path can be tested, and the first two are yours:
+Both clients are installed (offline builds, each with its own bundled JRE,
+490 MB apiece, installed 2026-09-07 from Interactive Brokers' signed installers):
+
+| | path | paper port |
+|---|---|---|
+| **IB Gateway** — lighter, no charts, built for unattended API use | `%LOCALAPPDATA%\Programs\ibgateway\ibgateway.exe` | **4002** |
+| **TWS** — the full trading terminal | `%LOCALAPPDATA%\Programs\tws\tws.exe` | **7497** |
+
+From the API's side they are identical; prefer the Gateway on this machine.
+That is the software only. Three things have to happen before the futures path
+can be tested, and the first two are yours:
 
 1. **An IB account.** A paper account is created from the account management
    page of a funded, approved live account, and new clients get one with a
    million dollars of simulated equity. Opening the live account takes identity
    documents and a few days. There is no way around this: TWS will not log in
    without credentials, and entering them is yours alone.
-2. **Log in to TWS and open the API.** Global Configuration → API → Settings:
-   tick *Enable ActiveX and Socket Clients*, set the socket port to **7497**
-   (paper), leave *Read-Only API* **unticked**, and add `127.0.0.1` to trusted
-   IPs. Paper logins are on a separate username from the live one.
-3. **Then the test runs itself**, and refuses cleanly if TWS is not up:
+2. **Log in and open the API.** In the Gateway, choose the *IB API* mode and the
+   *Paper Trading* tab at login, then Configure → Settings → API → Settings. In
+   TWS it is Global Configuration → API → Settings. Either way: tick *Enable
+   ActiveX and Socket Clients*, confirm the socket port (4002 Gateway paper,
+   7497 TWS paper), leave *Read-Only API* **unticked**, and add `127.0.0.1` to
+   trusted IPs. Paper logins use a separate username from the live one.
+3. **Then the test runs itself**, and refuses cleanly if neither client is up,
+   naming the port it tried and exiting non-zero:
 
 ```bash
-python scripts/verify_roundtrip_ib.py --fake   # 12 checks on the test double, no TWS needed
-python scripts/verify_roundtrip_ib.py          # against TWS paper on 7497, dry run
-python scripts/verify_roundtrip_ib.py --send   # places one micro contract. Yours to run.
+python scripts/verify_roundtrip_ib.py --fake            # 12 checks on the test double, no client needed
+python scripts/verify_roundtrip_ib.py --port 4002       # against IB Gateway paper, dry run
+python scripts/verify_roundtrip_ib.py                   # against TWS paper on 7497, dry run
+python scripts/verify_roundtrip_ib.py --port 4002 --send  # places one micro contract. Yours to run.
 ```
 
 The path is already proven end to end on the test double: front-month

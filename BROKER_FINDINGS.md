@@ -168,3 +168,27 @@ path, and after a stop modification.
 Note this is specific to IB's separate child-stop model. On MT5 the stop is a
 field on the position itself and cannot expire, which is why the CFD side never
 showed this.
+
+**4. The roll carried the stop across at its face value.** Measured live: a long
+in the September S&P micro at 7722.25 with its stop at 7714.75, seven points
+away, rolled into December at 7785 and kept a stop of 7714.75 - seventy points
+away, nine times the intended risk. Two delivery months of the same future are
+not the same price; on that day the carry between them was sixty-three points.
+A short would have been worse: its stop would have landed on the far side of the
+new contract and liquidated the position the moment it was placed. `roll()` now
+measures the basis while both months still quote, shifts the stop by it, and
+preserves the risk distance. Backwardation moves it the other way; the sign
+follows the curve.
+
+**5. The roll judged its close leg after a quarter of a second.** `submit()` and
+`close()` both wait `fill_timeout` for `isDone()`; `roll()` slept 0.25s and
+decided, so a fill arriving a moment later was reported REJECTED - which is why
+the roll showed FAIL on 2026-09-07 after it had actually worked. Worse, the code
+then reopened in the front month regardless, which on a genuinely unfilled close
+would leave a doubled position in the month being abandoned. All three paths now
+share `_await_fill`, and a close that does not confirm stops the roll instead of
+compounding it.
+
+Warning 2109 ("Outside Regular Trading Hours is ignored based on the order type
+and destination") is noise: IB parks the trade in `ValidationError` while it
+processes the warning, then fills. `isDone()` correctly waits through it.

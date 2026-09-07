@@ -245,32 +245,49 @@ class IBAdapter:
             return last, last, t  # delayed feeds often carry only a last price
         return 0.0, 0.0, t
 
-    def tick(self, symbol: str) -> Tick:
-        """Best quote available, falling back through the entitlement ladder.
+    def _best_quote(self, contract, label: str) -> tuple[float, float]:
+        """Bid and ask for one specific contract, down the entitlement ladder.
 
         Live first, because a real subscription is what production uses. On an
         account without one, IB answers with NaN rather than an error the client
-        can catch, so the fallback is by value, not by exception. Whichever type
-        answered is recorded in `market_data_type` and the tick's staleness is
-        the caller's to judge - a delayed quote is fine for verifying a code
-        path and useless for measuring a fill.
+        can catch, so the fallback is by value, not by exception.
         """
-        c = self.contract(symbol)
         for data_type, wait in ((self.LIVE, 0.5), (self.DELAYED, 2.0), (self.DELAYED_FROZEN, 2.0)):
             if self.market_data_type is not None and data_type < self.market_data_type:
                 continue  # a previous call already established there is no entitlement
-            bid, ask, _ = self._quote_once(c, data_type, wait)
+            bid, ask, _ = self._quote_once(contract, data_type, wait)
             if bid > 0 and ask > 0:
                 if self.market_data_type != data_type:
                     self.market_data_type = data_type
-                    log.info("%s: market data type %d (%s)", symbol, data_type,
+                    log.info("%s: market data type %d (%s)", label, data_type,
                              {1: "live", 3: "delayed", 4: "delayed frozen"}[data_type])
-                ts = datetime.now(timezone.utc)
-                return Tick(symbol=symbol, ts=ts, bid=bid, ask=ask)
+                return bid, ask
         raise ExecutionError(
-            f"no quote for {symbol} on live, delayed or frozen data. The contract may "
+            f"no quote for {label} on live, delayed or frozen data. The contract may "
             f"not be trading, or the account has no entitlement at all."
         )
+
+    def tick(self, symbol: str) -> Tick:
+        """Best quote for the front contract. `market_data_type` records which
+        entitlement answered; anything but live means the price is 10-15 minutes
+        old and must not be used to measure execution quality."""
+        bid, ask = self._best_quote(self.contract(symbol), symbol)
+        return Tick(symbol=symbol, ts=datetime.now(timezone.utc), bid=bid, ask=ask)
+
+    def _await_fill(self, trade) -> bool:
+        """Block until the trade is done or `fill_timeout` expires.
+
+        Used by every order path. `roll()` used to sleep a quarter of a second
+        and judge, so a fill that arrived a moment later was reported REJECTED -
+        which on 2026-09-07 marked a roll as failed after it had actually
+        worked. IB may also park a trade in `ValidationError` while it processes
+        a warning (2109, outside-RTH ignored for this order type); that is not
+        terminal and `isDone()` correctly keeps waiting through it.
+        """
+        deadline = time.time() + self.fill_timeout
+        while time.time() < deadline and not trade.isDone():
+            self.ib.sleep(0.25)
+        return trade.orderStatus.status == "Filled"
 
     def bars(self, symbol: str, timeframe: str, count: int, end: datetime | None = None) -> list[Bar]:
         if timeframe not in BAR_SIZE:
@@ -348,9 +365,7 @@ class IBAdapter:
         self._orders[parent.orderId] = {"symbol": request.symbol, "side": request.side,
                                         "stop": stop_order, "comment": request.comment}
 
-        deadline = time.time() + self.fill_timeout
-        while time.time() < deadline and not trade.isDone():
-            self.ib.sleep(0.25)
+        self._await_fill(trade)
         status = trade.orderStatus
         if status.status != "Filled":
             reason = f"{status.status}: {getattr(trade, 'log', [''])[-1] if getattr(trade, 'log', None) else 'not filled'}"
@@ -392,9 +407,7 @@ class IBAdapter:
         order = self.market_order("SELL" if side is Side.BUY else "BUY", qty)
         order.orderRef = "close"
         trade = self.ib.placeOrder(c, order)
-        deadline = time.time() + self.fill_timeout
-        while time.time() < deadline and not trade.isDone():
-            self.ib.sleep(0.25)
+        self._await_fill(trade)
         req = OrderRequest(symbol, side.opposite(), float(qty), comment="close")
         if trade.orderStatus.status != "Filled":
             return OrderResult(OrderStatus.REJECTED, req, ticket=ticket, reason=trade.orderStatus.status)
@@ -418,11 +431,30 @@ class IBAdapter:
                 return True
         return False
 
+    def roll_basis(self, symbol: str, old: tuple[int, int]) -> float:
+        """New contract's price minus the expiring one's, at this moment.
+
+        Two delivery months of the same future are not the same price. On
+        2026-09-07 the September S&P micro traded at 7722 and December at 7785:
+        sixty-three points of carry between them.
+        """
+        old_bid, old_ask = self._best_quote(self.contract(symbol, old), f"{symbol} {old[0]}{old[1]:02d}")
+        new_bid, new_ask = self._best_quote(self.contract(symbol), symbol)
+        return (new_bid + new_ask) / 2 - (old_bid + old_ask) / 2
+
     def roll(self, symbol: str) -> list[OrderResult]:
         """Close the expiring contract, reopen the same side and size in the front.
 
-        Two market orders, journaled by the caller. The stop is re-attached at the
-        same price on the new contract; the caller may re-size it after.
+        Two market orders, journaled by the caller.
+
+        **The stop is shifted by the basis, not carried across at its face
+        value.** Two delivery months trade at different prices, so reattaching
+        the old stop price to the new contract changes the risk by the whole
+        carry. Measured live on 2026-09-07: a long in the September S&P micro at
+        7722 with its stop at 7714.75, seven points away, rolled into December
+        at 7785 and kept a stop at 7714.75 - seventy points away, nine times the
+        intended risk. A short would have been worse: the stop would have landed
+        on the far side of the market and liquidated the position on arrival.
         """
         r = self.root(symbol)
         results: list[OrderResult] = []
@@ -443,17 +475,31 @@ class IBAdapter:
             old_c = self.contract(symbol, old)
             if ticket is not None and self._orders[ticket]["stop"] is not None:
                 self.ib.cancelOrder(self._orders[ticket]["stop"])
+            # Measure the basis BEFORE closing, while both contracts still quote.
+            new_stop = None
+            if stop_px is not None:
+                basis = self.roll_basis(symbol, old)
+                spec = self.spec(symbol)
+                new_stop = spec.normalize_price(stop_px + basis)
+                log.info("%s roll: basis %+.4f, stop %s -> %s", symbol, basis, stop_px, new_stop)
+
             closing = self.market_order("SELL" if side is Side.BUY else "BUY", qty)
             closing.orderRef = "roll-close"
             t1 = self.ib.placeOrder(old_c, closing)
-            self.ib.sleep(0.25)
-            results.append(OrderResult(OrderStatus.FILLED if t1.orderStatus.status == "Filled" else OrderStatus.REJECTED,
+            filled = self._await_fill(t1)
+            results.append(OrderResult(OrderStatus.FILLED if filled else OrderStatus.REJECTED,
                                        OrderRequest(symbol, side.opposite(), qty, comment="roll-close"),
-                                       ticket=ticket, fill_price=float(t1.orderStatus.avgFillPrice or 0)))
+                                       ticket=ticket, fill_price=float(t1.orderStatus.avgFillPrice or 0),
+                                       reason="" if filled else t1.orderStatus.status))
             self._orders.pop(ticket, None)
+            if not filled:
+                # The old contract is still open. Reopening now would double the
+                # position in an expiring month, which is the worst of both.
+                log.error("%s roll: close leg did not fill (%s); not reopening", symbol, t1.orderStatus.status)
+                return results
 
             # Reopen in the front month through the normal path so the stop is attached.
-            reopened = self.submit(OrderRequest(symbol, side, qty, stop_loss=stop_px, comment=comment))
+            reopened = self.submit(OrderRequest(symbol, side, qty, stop_loss=new_stop, comment=comment))
             results.append(reopened)
         return results
 

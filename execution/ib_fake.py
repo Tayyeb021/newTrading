@@ -168,8 +168,11 @@ class FakeIB:
 
     # ---------------------------------------------------------------- market
 
-    def _quote(self, symbol: str) -> tuple[float, float]:
-        mid = self.prices[symbol]
+    def _quote(self, symbol: str, month: str = "") -> tuple[float, float]:
+        """Price for one contract. `prices` may be keyed per delivery month
+        ("MES:20261218") so a test can give two months different prices, which
+        is what real futures do and what the roll's basis adjustment depends on."""
+        mid = self.prices.get(f"{symbol}:{month}", self.prices[symbol]) if month else self.prices[symbol]
         half = self.roots[symbol].tick_size * self.spread_ticks / 2
         return mid - half, mid + half
 
@@ -183,7 +186,7 @@ class FakeIB:
         if self.entitled_types is not None and self.market_data_type not in self.entitled_types:
             nan = float("nan")
             return _Ticker(nan, nan, nan, nan, self.now)
-        bid, ask = self._quote(c.symbol)
+        bid, ask = self._quote(c.symbol, str(c.lastTradeDateOrContractMonth))
         return _Ticker(bid, ask, self.prices[c.symbol], self.prices[c.symbol], self.now)
 
     def reqHistoricalData(self, c, endDateTime, durationStr, barSizeSetting, whatToShow, useRTH, formatDate=2):
@@ -214,7 +217,7 @@ class FakeIB:
         return trade
 
     def _fill(self, trade: _Trade, record: bool) -> None:
-        bid, ask = self._quote(trade.contract.symbol)
+        bid, ask = self._quote(trade.contract.symbol, str(trade.contract.lastTradeDateOrContractMonth))
         px = ask if trade.order.action == "BUY" else bid
         trade.orderStatus = _Status("Filled", trade.order.totalQuantity, px)
         if record:

@@ -87,3 +87,44 @@ the **size of the move being traded** than on the entry timeframe.
 M5 entry is viable here on EURUSD, gold and US30. It was not on the previous
 broker, where the same table read 22-24%. That was a spread problem, not a
 timeframe problem.
+
+---
+
+## Demo fills at the quote: slippage cannot be measured here (2026-09-07)
+
+Four real round trips on IC Markets demo #52946213, 60/60 checks passed, one
+minimum lot each, opened, stop attached, stop moved, closed, account reconciled
+flat. The live path is proven end to end on EURUSD, XAUUSD, US30 and US500.
+
+**Every one of the eight legs slipped exactly zero.** Across instruments quoting
+from 0 to 120 points of spread, including a six-second-old quote on US30, the
+fill came back at the quoted price every time, and every operation took 288-300ms.
+That is not execution quality; it is a demo server with no liquidity to consume,
+filling at whatever it last quoted.
+
+Consequence: **slippage is not measurable on this account.** Writing zero into
+the cost model would halve modelled friction. Entry 007 died at 295% of gross,
+so halving friction would revive strategies the research has already killed -
+the worst error available to this repository. `calibrate_costs.py` therefore
+refuses any slippage sample whose median is zero or below 5% of the spread,
+keeps the assumed half-spread, and records `slippage_calibrated: false` per
+symbol. Only a live account can settle this.
+
+Spreads, being quoted rather than filled, do survive the demo. Measured in the
+London pre-open, which is the worst hour:
+
+| symbol | measured spread | previously assumed |
+|---|---|---|
+| US30 | 120 pts | 350 pts |
+| XAUUSD | 8 pts | 28 pts |
+| US500 | 50 pts | 55 pts |
+| EURUSD | 0 pts | 12 pts |
+
+The assumptions were two to three times *worse* than reality on the indices and
+metals, so nothing downstream was flattered by them. EURUSD quoting zero is the
+signature of a raw-spread account, where the cost sits in commission instead;
+a zero spread is refused too, because a model that charges nothing to cross is
+not a cost model, and the commission figure needs verifying separately.
+
+None of this touches entries 007-013: those run on `CostModel.for_futures`,
+priced from exchange tick sizes and per-side commission, not from these CFDs.

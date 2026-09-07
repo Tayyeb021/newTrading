@@ -1,0 +1,62 @@
+{
+  "calibrated_at": "2026-09-07T06:35:53.469469+00:00",
+  "costs": {
+    "EURUSD": {
+      "commission_per_lot_per_side": 0.0,
+      "fills": 2,
+      "quote_samples": 25,
+      "slippage": 3e-05,
+      "slippage_calibrated": false,
+      "slippage_note": "spread not calibrated",
+      "spread": 0.00012,
+      "spread_calibrated": false,
+      "spread_multiple_at_open": 1.5,
+      "swap_long": 0.0,
+      "swap_short": 0.0
+    },
+    "US30": {
+      "commission_per_lot_per_side": 0.0,
+      "fills": 2,
+      "quote_samples": 25,
+      "slippage": 1.2,
+      "slippage_calibrated": false,
+      "slippage_note": "median slippage is zero over 2 fills - the venue filled at quote",
+      "spread": 1.2000000000043656,
+      "spread_calibrated": true,
+      "spread_multiple_at_open": 3.0,
+      "swap_long": 0.0,
+      "swap_short": 0.0
+    },
+    "US500": {
+      "commission_per_lot_per_side": 0.0,
+      "fills": 2,
+      "quote_samples": 25,
+      "slippage": 0.2,
+      "slippage_calibrated": false,
+      "slippage_note": "median slippage is zero over 2 fills - the venue filled at quote",
+      "spread": 0.5,
+      "spread_calibrated": true,
+      "spread_multiple_at_open": 3.0,
+      "swap_long": 0.0,
+      "swap_short": 0.0
+    },
+    "XAUUSD": {
+      "commission_per_lot_per_side": 0.0,
+      "fills": 2,
+      "quote_samples": 25,
+      "slippage": 0.08,
+      "slippage_calibrated": false,
+      "slippage_note": "median slippage is zero over 2 fills - the venue filled at quote",
+      "spread": 0.07999999999992724,
+      "spread_calibrated": true,
+      "spread_multiple_at_open": 2.5,
+      "swap_long": 0.0,
+      "swap_short": 0.0
+    }
+  },
+  "slippage_measurable": false,
+  "sources": {
+    "fills": "measured_fills.json",
+    "quotes": "spread_samples.jsonl"
+  }
+}

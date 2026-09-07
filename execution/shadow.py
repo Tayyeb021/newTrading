@@ -63,6 +63,13 @@ class ShadowAdapter(PaperAdapter):
     def bars(self, symbol: str, timeframe: str, count: int, end: datetime | None = None) -> list[Bar]:
         return self._live.bars(symbol, timeframe, count, end)
 
+    def bar_extras(self, symbol: str, timeframe: str, count: int,
+                   end: datetime | None = None) -> dict[str, list]:
+        """Relay the venue's extra columns, so a rule reading the curve behaves
+        identically whether fills are shadowed or real."""
+        fn = getattr(self._live, "bar_extras", None)
+        return fn(symbol, timeframe, count, end) if fn is not None else {}
+
     def spec(self, symbol: str) -> SymbolSpec:
         return self._live.spec(symbol)
 

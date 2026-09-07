@@ -91,6 +91,10 @@ class IBAdapter:
         #: frozen. None until the first quote. Anything but 1 means prices are
         #: 10-15 minutes old and may not be used to measure execution quality.
         self.market_data_type: int | None = None
+        #: (contract, timeframe, count, end) -> (fetched_at, bars). See _history:
+        #: this is a rate limit, not a speed optimisation.
+        self._bar_cache: dict[tuple, tuple[float, list]] = {}
+        self.bar_cache_seconds = 600.0
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -297,15 +301,27 @@ class IBAdapter:
             self.ib.sleep(0.25)
         return trade.orderStatus.status == "Filled"
 
-    def bars(self, symbol: str, timeframe: str, count: int, end: datetime | None = None) -> list[Bar]:
-        if timeframe not in BAR_SIZE:
-            raise ExecutionError(f"unknown timeframe {timeframe!r}")
-        c = self.contract(symbol)
+    def _history(self, contract, timeframe: str, count: int, end: datetime | None, symbol: str) -> list[Bar]:
+        """Raw history for one specific contract, cached briefly.
+
+        The cache is not an optimisation, it is a rate limit. IB allows sixty
+        historical requests per ten minutes. A four-sleeve book on thirteen
+        markets asks for the same thirteen series fifty-two times per poll, and
+        carry doubles that again by needing the next delivery month too. Without
+        this, the book pages IB out of its own quota within one tick.
+        """
+        key = (getattr(contract, "conId", None) or id(contract), timeframe, count,
+               end.isoformat() if end else "")
+        hit = self._bar_cache.get(key)
+        now = time.time()
+        if hit is not None and now - hit[0] < self.bar_cache_seconds:
+            return hit[1]
+
         seconds = BAR_SECONDS[timeframe] * count
         duration = f"{max(1, seconds // 86400 + 1)} D" if seconds < 86400 * 365 else f"{seconds // (86400 * 365) + 1} Y"
         end_str = "" if end is None else end.astimezone(timezone.utc).strftime("%Y%m%d %H:%M:%S UTC")
         raw = self.ib.reqHistoricalData(
-            c, endDateTime=end_str, durationStr=duration, barSizeSetting=BAR_SIZE[timeframe],
+            contract, endDateTime=end_str, durationStr=duration, barSizeSetting=BAR_SIZE[timeframe],
             whatToShow="TRADES", useRTH=False, formatDate=2,
         )
         out: list[Bar] = []
@@ -317,7 +333,70 @@ class IBAdapter:
                 ts = ts.replace(tzinfo=timezone.utc)
             out.append(Bar(symbol, ts, float(b.open), float(b.high), float(b.low),
                            float(b.close), float(b.volume)))
-        return out[-count:]
+        out = out[-count:]
+        self._bar_cache[key] = (now, out)
+        return out
+
+    def carry_series(self, symbol: str, count: int, timeframe: str = "D1") -> dict[datetime, float]:
+        """Annualised roll yield per day: (front - next) / front, scaled by the
+        days between the two expiries.
+
+        Positive is backwardation, which pays a long as the contract rolls up
+        toward spot. This is the same quantity `data/continuous.stitch` writes
+        during a backtest, computed here from two live histories instead, so the
+        carry rule sees the identical number live and in research.
+
+        Empty when the next month has no history of its own - a market with one
+        listed contract has no curve, and inventing a number for it would be
+        worse than reading flat.
+        """
+        r = self.root(symbol)
+        front = self.front_month(symbol)
+        try:
+            nxt = r.next_after(*front)
+        except (ValueError, IndexError):
+            return {}
+        days = (r.last_trade(*nxt) - r.last_trade(*front)).days
+        if days <= 0:
+            return {}
+        try:
+            f_bars = self._history(self.contract(symbol, front), timeframe, count, None, symbol)
+            n_bars = self._history(self.contract(symbol, nxt), timeframe, count, None, symbol)
+        except Exception as exc:  # noqa: BLE001 - a deferred month may not trade yet
+            log.warning("%s: no carry series (%s: %s)", symbol, type(exc).__name__, exc)
+            return {}
+        next_by_day = {b.ts.date(): b.close for b in n_bars}
+        out: dict[datetime, float] = {}
+        for b in f_bars:
+            nc = next_by_day.get(b.ts.date())
+            if nc is None or b.close == 0:
+                continue
+            out[b.ts] = (b.close - nc) / abs(b.close) * (365.0 / days)
+        return out
+
+    def bar_extras(self, symbol: str, timeframe: str, count: int,
+                   end: datetime | None = None) -> dict[str, list]:
+        """Columns beyond OHLCV that a strategy may need, aligned to `bars`.
+
+        `carry` and `raw_close` are what the carry rule reads. The runner merges
+        whatever this returns, so a venue with no curve simply returns nothing
+        and the rule reads flat rather than erroring.
+        """
+        if timeframe != "D1":
+            return {}
+        bars = self.bars(symbol, timeframe, count, end)
+        carry = self.carry_series(symbol, count, timeframe)
+        if not carry:
+            return {}
+        return {
+            "carry": [carry.get(b.ts, float("nan")) for b in bars],
+            "raw_close": [b.close for b in bars],
+        }
+
+    def bars(self, symbol: str, timeframe: str, count: int, end: datetime | None = None) -> list[Bar]:
+        if timeframe not in BAR_SIZE:
+            raise ExecutionError(f"unknown timeframe {timeframe!r}")
+        return self._history(self.contract(symbol), timeframe, count, end, symbol)
 
     def positions(self, symbol: str | None = None) -> list[Position]:
         stops = self._open_stops()

@@ -412,6 +412,20 @@ class Runner:
             "low": b.low, "close": b.close, "volume": b.volume,
         } for b in closed])
         df["ts"] = pd.to_datetime(df["ts"], utc=True)
+
+        # Columns beyond OHLCV that some rules need - carry reads the front
+        # against the next delivery month, which no single bar series carries.
+        # Optional by design: a venue without a curve supplies nothing and the
+        # rule reads flat, exactly as it does on a CFD.
+        extras = getattr(self.adapter, "bar_extras", None)
+        if extras is not None:
+            try:
+                for name, values in (extras(symbol, timeframe, strategy.warmup + 60) or {}).items():
+                    if len(values) >= len(closed):
+                        df[name] = list(values)[-len(closed):]
+            except Exception as exc:  # noqa: BLE001 - an absent curve is not a reason to stop trading
+                log.warning("%s: bar_extras failed (%s); rules needing them will read flat",
+                            symbol, exc)
         df = strategy.prepare(df)
 
         # This sleeve's position on this symbol - another sleeve may hold the

@@ -77,13 +77,19 @@ UNIVERSE = tuple(MICRO_UNIVERSE)
 
 
 def build_sleeves(symbols: tuple[str, ...], with_carry: bool) -> list[Sleeve]:
+    """Trend at three speeds plus carry - the combination entry 010 measured at
+    0.32, the best result the research produced, and better than either alone at
+    a correlation of about 0.2 between them.
+
+    Carry reads the front contract against the next delivery month, which the
+    adapter now supplies live through `bar_extras`. Before that was wired it sat
+    in the book reading flat, which is worse than not running it at all.
+    """
     sleeves = [
         Sleeve(f"tsmom{lb}", (lambda s, lb=lb: TSMOM(lookback=lb)), symbols, timeframe="D1")
         for lb in LOOKBACKS
     ]
     if with_carry:
-        # Carry needs a term-structure column the live bar feed does not supply,
-        # so it reads flat here. Included only when explicitly asked for.
         sleeves.append(Sleeve("carry", lambda s: Carry.published(), symbols, timeframe="D1"))
     return sleeves
 
@@ -149,7 +155,9 @@ def main() -> int:
                          "of quiet sits well inside that, while polling every 5 minutes would not")
     ap.add_argument("--minutes", type=float, default=None, help="stop after this long; default runs until killed")
     ap.add_argument("--live-paper", action="store_true", help="send orders to the IB paper account")
-    ap.add_argument("--with-carry", action="store_true", help="add the carry sleeve (needs a curve feed)")
+    ap.add_argument("--no-carry", action="store_true",
+                    help="momentum only. Carry is part of the declared design; dropping it "
+                         "changes the terms of the record")
     ap.add_argument("--vol-target", action="store_true", help="size the book to 12% annualised (entry 011)")
     ap.add_argument("--dry-run", action="store_true", help="startup checks, then exit")
     ap.add_argument("--report", action="store_true", help="summarise the record so far")
@@ -184,7 +192,7 @@ def main() -> int:
 
     mode = "live-paper" if args.live_paper else "shadow"
     adapter = live if args.live_paper else ShadowAdapter(live, specs)
-    sleeves = build_sleeves(symbols, args.with_carry)
+    sleeves = build_sleeves(symbols, with_carry=not args.no_carry)
     profile = RiskProfile.load(args.profile)
     engine = build_engine(profile, account.equity, specs, sleeves)
     allocator = VolTarget(target_annual_vol=TARGET_VOL,

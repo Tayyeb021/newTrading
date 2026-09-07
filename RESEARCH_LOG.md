@@ -896,3 +896,34 @@ Expectation, recorded in advance so it cannot be revised: net Sharpe near 0.3
 with a drawdown of 20-30% and long flat stretches, and roughly a one-in-three
 chance that the first twelve months are negative even if the edge is real. A
 year is a small sample of a slow strategy.
+
+### Forward record amended before its first decision — carry added, 2026-09-07 09:39 UTC
+
+The record started at 08:59 ran momentum only. Carry was in the codebase,
+tested, and doing nothing live: it reads the front contract against the next
+delivery month, and a live bar feed supplies only the front, so it saw NaN and
+returned flat on every bar. A sleeve that cannot see its own signal is worse
+than an absent one, because the book looks diversified and is not.
+
+Entry 010 measured trend plus carry at 0.32 against 0.31 for trend alone, at a
+correlation near 0.2 - the best number this project produced. Running the record
+without it was not a design choice, it was an omission.
+
+Fixed: `IBAdapter.carry_series` computes the annualised roll yield from two live
+histories, the same quantity `data/continuous.stitch` writes in a backtest, and
+`bar_extras` hands it to the runner, which merges it into the frame a strategy
+sees. Optional throughout: a venue with no curve supplies nothing and the rule
+reads flat, as it does on a CFD. Verified live against IB, and the signs are
+right: S&P -3.5% and gold -4.5% (contango, rates above dividends and financing),
+crude +39.6% (steep backwardation), 10-year +0.7%, bitcoin -7.1%.
+
+Also added while doing it: a ten-minute bar cache in the adapter. Not an
+optimisation - IB allows sixty historical requests per ten minutes and a
+four-sleeve book on thirteen markets with carry asks for over a hundred per
+poll.
+
+**The first record is void and archived** as `state/superseded_forward_*`. It
+had taken zero decisions and zero fills, so nothing was lost, and the manifest
+is what made the change visible rather than quiet. The record now running was
+declared at 09:39 UTC with four sleeves, and the first decision is still
+2026-10-01.

@@ -521,6 +521,35 @@ position's stop is found by joining to its child order, and attribution falls
 back to the broker's own order records so it survives a restart — the lost-reply
 double-fill this exposed is now a regression test.
 
+### Interactive Brokers setup
+
+TWS is installed at `%LOCALAPPDATA%\Programs\tws\tws.exe` (offline build, its own
+bundled JRE, 490 MB, installed 2026-09-07 from Interactive Brokers' signed
+installer). It is the software only. Three things have to happen before the
+futures path can be tested, and the first two are yours:
+
+1. **An IB account.** A paper account is created from the account management
+   page of a funded, approved live account, and new clients get one with a
+   million dollars of simulated equity. Opening the live account takes identity
+   documents and a few days. There is no way around this: TWS will not log in
+   without credentials, and entering them is yours alone.
+2. **Log in to TWS and open the API.** Global Configuration → API → Settings:
+   tick *Enable ActiveX and Socket Clients*, set the socket port to **7497**
+   (paper), leave *Read-Only API* **unticked**, and add `127.0.0.1` to trusted
+   IPs. Paper logins are on a separate username from the live one.
+3. **Then the test runs itself**, and refuses cleanly if TWS is not up:
+
+```bash
+python scripts/verify_roundtrip_ib.py --fake   # 12 checks on the test double, no TWS needed
+python scripts/verify_roundtrip_ib.py          # against TWS paper on 7497, dry run
+python scripts/verify_roundtrip_ib.py --send   # places one micro contract. Yours to run.
+```
+
+The path is already proven end to end on the test double: front-month
+resolution, spec from the exchange, sizing, an order with a child stop, a stop
+modification, a roll to the next contract, close, and flat. What TWS adds is
+whether IB behaves the way the double does.
+
 What still needs your credentials: a Databento key for per-expiry history, and
 TWS or IB Gateway running with API access for the live dry run. Neither has a
 placeholder fallback; both refuse and explain.

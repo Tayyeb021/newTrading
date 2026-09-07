@@ -927,3 +927,109 @@ had taken zero decisions and zero fills, so nothing was lost, and the manifest
 is what made the change visible rather than quiet. The record now running was
 declared at 09:39 UTC with four sleeves, and the first decision is still
 2026-10-01.
+
+---
+
+## 014 — Donchian breakout on futures — **PRE-REGISTERED, declared before running**
+
+*2026-09-07. Declared before the strategy was written, let alone run.*
+
+The user asked what happened to swing, trend and breakout. Checking rather than
+answering from memory found something worth recording: breakout WAS tested, in
+entry 003's screen, but that screen ran on CFD data we later proved was empty
+ground. On the futures universe - the one with real exchange data and the only
+surviving result - exactly two families have ever been tested, trend and carry.
+Breakout has not.
+
+The Donchian indicator has been in `features/indicators.py` since phase 2, with
+a test asserting it excludes the current bar, and no strategy has ever used it.
+
+**The rule, in its published form.** Enter long when the close exceeds the
+highest high of the previous N days, short below the lowest low. Exit on the
+opposite M-day channel, M = N/2, or on a 2-ATR stop, whichever comes first. No
+moving-average filter, no volatility filter, no confirmation: that is the
+Turtle system as published, and adding filters is how a tested rule becomes an
+untested one.
+
+Turnover is low by construction rather than by a calendar. A breakout enters
+once on the break and holds until the exit channel gives way, which is what
+distinguishes it from the daily-decided forms that died of friction in 007-009.
+
+**Speeds:** 20/10, 55/20 (the two Turtle systems as published) and 100/50, plus
+their equal-weight ensemble. **Four trials.** Running total 200.
+
+**Data and costs:** identical to 007-013. The 46-market research universe, daily
+bars 2011 onward, `CostModel.for_futures` at the 2x stress, `--equity 20000000
+--size-as full` so contract granularity never binds.
+
+**Pass thresholds, the same six that 007 and 010 were held to:**
+
+1. Ensemble net Sharpe >= 0.40 at 2x costs.
+2. Positive in at least 70% of calendar years.
+3. PBO across the three speeds < 0.50.
+4. Deflated Sharpe > 0 given 200 trials.
+5. Last five years net Sharpe > 0.
+6. At least 5 of 7 core sectors positive.
+
+**And two more, because breakout only earns a place if it is not trend wearing
+a different hat:**
+
+7. Weekly return correlation with the entry-010 momentum ensemble below 0.6.
+8. Momentum plus breakout beats momentum alone.
+
+Fail 1-6 and it is dead like the others. Pass those but fail 7 or 8 and it is
+real but redundant, which is also worth knowing and is what I expect: a channel
+break and a positive trailing return are close cousins.
+
+---
+
+## 014 — VERDICT: **DEAD, and for a different reason than the others.**
+
+*2026-09-07, 46 markets, 2011-2026, $20M, 2x cost stress, research profile.
+`state/gauntlet_014_wide.json`.*
+
+| | value |
+|---|---|
+| ensemble net Sharpe | **0.18** |
+| positive years | 5 / 15 |
+| last five years | −0.09 |
+| PBO across speeds | 0.14 |
+| positive sectors | 5 / 7 |
+| **gross P&L before costs** | **−$114,546** |
+| friction | $23.2M |
+
+Thresholds 3, 4 and 6 pass; 1, 2 and 5 fail. Dead as declared.
+
+### The distinction that matters
+
+Entry 007 died of turnover: the signal made money and friction took three times
+it. **Breakout did not die of turnover. It died of not being a signal.** Gross
+P&L before a cent of cost is slightly NEGATIVE across fifteen years and
+forty-six markets. There was nothing there for costs to eat.
+
+That is a cleaner result than 007's and a more useful one. No amount of cost
+reduction, execution improvement or position sizing rescues a rule whose gross
+is zero. It is not a question of trading it more cheaply.
+
+### The same pattern as momentum, again
+
+| speed | trades per market per year | net |
+|---|---|---|
+| 20-day | 8.1 | −$31.2M |
+| 55-day | 4.1 | −$2.0M |
+| 100-day | 2.5 | **+$9.9M** |
+
+The slow channel makes money and the fast one destroys it, exactly as tsmom250
+carried entry 010 while tsmom60 lost. Two independent families agreeing that
+only the slow end works, on the same data, is the most consistent finding this
+log has produced. It is also the finding I am NOT permitted to act on by
+picking the slow speed after the fact - the same refusal recorded in 010 and 012.
+
+The three speeds correlate 0.71 to 0.86 with each other, so the "ensemble" was
+never one. Three views of the same channel is not diversification.
+
+### On the user's question
+
+Breakout was worth testing and is now tested on the universe that matters. The
+answer is that a channel break carries no information here that a trailing
+return does not, and less of it. Trials: 200.

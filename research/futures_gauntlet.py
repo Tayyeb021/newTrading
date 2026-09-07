@@ -44,9 +44,10 @@ from risk.build import build_engine  # noqa: E402
 from risk.voltarget import VolTarget  # noqa: E402
 from strategies.carry import Carry  # noqa: E402
 from strategies.trend import TrendFollowing  # noqa: E402
+from strategies.breakout import Breakout  # noqa: E402
 from strategies.tsmom import TSMOM  # noqa: E402
 
-TRIALS_SO_FAR = 192  # RESEARCH_LOG running total after 011 was declared
+TRIALS_SO_FAR = 200  # RESEARCH_LOG running total after 014 was declared
 
 
 def load_universe(since: int, folder: Path, size_as: str, names=None):
@@ -87,6 +88,9 @@ def build_sleeves(names, kinds, lookbacks, continuous):
         for lb in lookbacks:
             sleeves.append(Sleeve(f"vtsmom{lb}", (lambda s, lb=lb: TSMOM(lookback=lb, monthly_resize=True)),
                                   tuple(names), timeframe="D1"))
+    if "breakout" in kinds:  # entry 014: Donchian channels, exit at half the entry length
+        for n in lookbacks:
+            sleeves.append(Sleeve(f"brk{n}", (lambda s, n=n: Breakout(entry=n)), tuple(names), timeframe="D1"))
     if "carry011" in kinds:
         sleeves.append(Sleeve("vcarry", lambda s: Carry.published(monthly_resize=True), tuple(names), timeframe="D1"))
     return sleeves
@@ -268,7 +272,7 @@ def run_book(bars, specs, trade, sleeves, equity, profile_name, stress, target_v
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c", "012"], required=True,
+    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c", "012", "014"], required=True,
                     help="010 = published monthly trend, 010c = carry in risk units, "
                          "011/011c = the same, resized monthly to the book's volatility target, "
                          "012 = breadth verdict from the saved core and wide runs (no backtest)")
@@ -308,11 +312,15 @@ def main() -> int:
     results: dict[str, dict] = {}
     state = Path("state"); state.mkdir(exist_ok=True)
     monthly = args.entry.startswith(("010", "011"))
-    lookbacks = args.lookbacks or ([60, 120, 250] if monthly else [20, 60, 120])
+    if args.entry == "014":
+        lookbacks = args.lookbacks or [20, 55, 100]   # the two Turtle systems, plus a slower one
+    else:
+        lookbacks = args.lookbacks or ([60, 120, 250] if monthly else [20, 60, 120])
     target_vol = args.target_vol if args.entry.startswith("011") else None
 
-    if args.entry in ("007", "008", "010", "011"):
-        kind = {"007": "trend", "008": "trend", "010": "tsmom", "011": "tsmom011"}[args.entry]
+    if args.entry in ("007", "008", "010", "011", "014"):
+        kind = {"007": "trend", "008": "trend", "010": "tsmom", "011": "tsmom011",
+                "014": "breakout"}[args.entry]
         sleeves = build_sleeves(names, [kind], lookbacks, continuous=(args.entry == "008"))
         res = run_book(bars, specs, trade, sleeves, args.equity, args.profile, args.stress, target_vol)
         print(portfolio_report(res))

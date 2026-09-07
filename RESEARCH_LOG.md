@@ -1033,3 +1033,32 @@ never one. Three views of the same channel is not diversification.
 Breakout was worth testing and is now tested on the universe that matters. The
 answer is that a channel break carries no information here that a trailing
 return does not, and less of it. Trials: 200.
+
+### 014 thresholds 7 and 8: is breakout a different signal from momentum?
+
+*`state/gauntlet_014_vs_trend.json`. Both families in one book, 46 markets.*
+
+| momentum sleeve | vs breakout sleeve | weekly correlation |
+|---|---|---|
+| tsmom120 | brk100 | **+0.76** |
+| tsmom60 | brk55 | +0.70 |
+| tsmom60 | brk100 | +0.69 |
+| tsmom250 | brk100 | +0.61 |
+| tsmom250 | brk20 | +0.13 |
+
+Mean +0.50, highest +0.76. **Threshold 7 fails**: the pairs that matter, the
+slow ones that actually earn, are the most correlated of all. The only weakly
+correlated pair is the fast breakout against the slow momentum, and the fast
+breakout is the sleeve that lost $31M.
+
+Combined book net Sharpe **0.25**, against 0.31 for momentum alone.
+**Threshold 8 fails**: adding breakout does not improve the book, it degrades it.
+
+So the answer to "what about breakout" is complete and unambiguous. A channel
+break and a positive trailing return are the same signal at these horizons, the
+breakout expresses it with more trades and worse timing, and putting both in one
+book makes the book worse. It is not a family to keep, at any weight.
+
+Two families have now been tested on the futures universe and survived to a
+number: momentum and carry, which correlate at 0.2 and combine to 0.32. A third
+was tested and is not a third. Trials: 200.

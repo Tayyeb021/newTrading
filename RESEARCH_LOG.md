@@ -1062,3 +1062,131 @@ book makes the book worse. It is not a family to keep, at any weight.
 Two families have now been tested on the futures universe and survived to a
 number: momentum and carry, which correlate at 0.2 and combine to 0.32. A third
 was tested and is not a third. Trials: 200.
+
+---
+
+## 015 — Value and seasonality — **PRE-REGISTERED, declared before either is written**
+
+*2026-09-07.*
+
+Two families, each tested in the shape its own evidence was generated in. That
+matters more here than anywhere else so far, because the two shapes differ.
+
+### 015a — Value, CROSS-SECTIONAL
+
+Asness, Moskowitz and Pedersen (2013), *Value and Momentum Everywhere*, measure
+futures value as a long-horizon reversal and rank markets **against each
+other**, not against their own history. Testing it as a per-market timing rule
+would be testing something else and calling it value.
+
+**The rule.** On the first trading day of each month, for every market, take the
+log price five years ago minus the log price now, using the average of the
+months 4.5 to 5.5 years back as the reference so a single stale print cannot
+decide it. Rank all markets on that number. Long the cheapest third, short the
+dearest third, equal risk per market by inverse volatility, hold one month.
+
+Note the direction: value is the OPPOSITE of momentum at this horizon. What has
+fallen for five years is cheap. If both families are real they should be
+negatively or weakly correlated, which is the whole reason to run them together.
+
+### 015b — Seasonality, TIME-SERIES
+
+Commodity seasonality has a physical mechanism - harvest, heating and driving
+demand, herd cycles - and it is the single most overfittable idea in this log.
+Twelve months across forty-six markets is five hundred and fifty-two chances to
+find a pattern in noise. So the constraints are declared before anything runs:
+
+- **Only markets with a physical calendar**: the grains, energy and meats
+  sectors. Sixteen markets. Index futures, rates, FX, metals and crypto are
+  excluded because a seasonal effect there would have no mechanism, and finding
+  one would be evidence of a mistake rather than of a signal.
+- **Expanding window, strictly causal.** On the first trading day of calendar
+  month m in year Y, use the mean return of month m across years before Y only.
+  Minimum five prior observations or the market stands aside.
+- **No month selection.** Every month is traded on the sign of its own history.
+  Choosing which months to trade after seeing results is the post-hoc choice
+  this log has refused four times.
+- Long if the prior mean is positive, short if negative, hold to month end,
+  4-ATR disaster stop.
+
+### Trials and thresholds
+
+Four trials: value alone, value beside the standing book, seasonality alone,
+seasonality beside the standing book. Running total **204**.
+
+Each family alone is held to the same six thresholds as 007, 010 and 014, at 2x
+costs on the 46-market universe, $20M, `--size-as full`. Each combination is
+held to the two from 014:
+
+7. Weekly correlation with the momentum ensemble below 0.6.
+8. The combined book beats the standing book, which is momentum plus carry at
+   **0.32**.
+
+For value I expect the correlation test to pass and the Sharpe test to fail:
+five-year reversal has been a poor decade. For seasonality I expect failure on
+threshold 1 and would treat any large positive as a warning to re-examine the
+causality of the window before believing it.
+
+---
+
+## 015 — VERDICT: **both dead.**
+
+*2026-09-07. `state/gauntlet_015a.json`, `state/gauntlet_015b_015b.json`.*
+
+### 015a — Value, cross-sectional
+
+| | |
+|---|---|
+| net Sharpe | **−0.35** |
+| annual return | −1.69% |
+| positive years | 5 / 11 |
+| last five years | −0.44 |
+| max drawdown | 18.0% |
+| turnover | 0.43 of notional a month |
+
+Thresholds 1, 2 and 5 all fail. Dead.
+
+**A data limitation worth recording.** Value needs five and a half years of
+history before it can score a market, and GLBX.MDP3 begins in June 2010, so the
+first month it could rank anything was May 2016. Eleven years, not fifteen, and
+they were eleven years in which the five-year reversal was a poor trade
+generally. This is a genuine constraint of the dataset rather than of the idea,
+and it is the strongest argument in this log for a vendor with pre-2010 history
+if the family is ever revisited.
+
+### 015b — Seasonality, time-series, physical markets only
+
+| | |
+|---|---|
+| net Sharpe | **−0.39** |
+| positive years | 3 / 15 |
+| last five years | −0.10 |
+| sectors positive | **0 of 3** |
+| friction | 27% of gross |
+
+Every threshold fails except the deflated Sharpe, which passes trivially because
+a negative Sharpe is not above noise. The 2011-2015 years show zero because the
+expanding window needs five prior observations of each calendar month and the
+data starts in mid-2010, so the rule correctly stood aside for its first five
+years. That is the causality constraint working, and it cost nothing to enforce.
+
+Energy, grains and meats each lost money separately. This is not one bad market
+dragging a good idea down; the effect is absent in all three sectors that were
+supposed to have a physical mechanism.
+
+### Thresholds 7 and 8 were not reached, deliberately
+
+Both families failed threshold 1 by a wide margin, so the combination tests were
+not run. It is worth saying why, because there is a tempting argument against
+that decision: a sleeve with a negative Sharpe can still improve a book if it is
+sufficiently negatively correlated. That is true in principle and it is how a
+losing strategy gets kept. At a Sharpe of −0.35 and −0.39 the variance reduction
+required to overcome the drag is not plausible, and going looking for it would
+be searching for a reason to keep something that lost money. Refused.
+
+### Where this leaves the research
+
+Six families have now been tested on the futures universe: momentum, carry,
+breakout, value, seasonality, and the machine-learning filter over the top of
+momentum. Two survive to a number, and they are the two already in the forward
+record. Trials: 204.

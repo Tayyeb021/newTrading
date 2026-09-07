@@ -45,9 +45,10 @@ from risk.voltarget import VolTarget  # noqa: E402
 from strategies.carry import Carry  # noqa: E402
 from strategies.trend import TrendFollowing  # noqa: E402
 from strategies.breakout import Breakout  # noqa: E402
+from strategies.seasonality import Seasonality  # noqa: E402
 from strategies.tsmom import TSMOM  # noqa: E402
 
-TRIALS_SO_FAR = 200  # RESEARCH_LOG running total after 014 was declared
+TRIALS_SO_FAR = 204  # RESEARCH_LOG running total after 014 was declared
 
 
 def load_universe(since: int, folder: Path, size_as: str, names=None):
@@ -91,6 +92,8 @@ def build_sleeves(names, kinds, lookbacks, continuous):
     if "breakout" in kinds:  # entry 014: Donchian channels, exit at half the entry length
         for n in lookbacks:
             sleeves.append(Sleeve(f"brk{n}", (lambda s, n=n: Breakout(entry=n)), tuple(names), timeframe="D1"))
+    if "season" in kinds:  # entry 015b: only markets with a physical calendar
+        sleeves.append(Sleeve("season", lambda s: Seasonality(), tuple(names), timeframe="D1"))
     if "carry011" in kinds:
         sleeves.append(Sleeve("vcarry", lambda s: Carry.published(monthly_resize=True), tuple(names), timeframe="D1"))
     return sleeves
@@ -272,7 +275,7 @@ def run_book(bars, specs, trade, sleeves, equity, profile_name, stress, target_v
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c", "012", "014"], required=True,
+    ap.add_argument("--entry", choices=["007", "008", "009", "010", "010c", "011", "011c", "012", "014", "015b"], required=True,
                     help="010 = published monthly trend, 010c = carry in risk units, "
                          "011/011c = the same, resized monthly to the book's volatility target, "
                          "012 = breadth verdict from the saved core and wide runs (no backtest)")
@@ -305,6 +308,11 @@ def main() -> int:
         return 0 if passed else 1
 
     names = list(CORE_UNIVERSE if args.universe == "core" else FULL_UNIVERSE)
+    if args.entry == "015b":
+        # Declared in the log: a seasonal effect without a physical mechanism
+        # would be evidence of a mistake, so index, rate, FX, metal and crypto
+        # markets are excluded before anything is measured.
+        names = [n for n in names if FULL_UNIVERSE[n].bucket in ("grains", "energy", "meats")]
     bars, specs, trade = load_universe(args.since, Path(args.data), args.size_as, names)
     print(f"{len(names)} markets ({args.universe}), {args.since}-{date.today().year}, equity {args.equity:,.0f}, "
           f"costs x{args.stress:g}, profile {args.profile}, sized as {args.size_as}")
@@ -318,9 +326,9 @@ def main() -> int:
         lookbacks = args.lookbacks or ([60, 120, 250] if monthly else [20, 60, 120])
     target_vol = args.target_vol if args.entry.startswith("011") else None
 
-    if args.entry in ("007", "008", "010", "011", "014"):
+    if args.entry in ("007", "008", "010", "011", "014", "015b"):
         kind = {"007": "trend", "008": "trend", "010": "tsmom", "011": "tsmom011",
-                "014": "breakout"}[args.entry]
+                "014": "breakout", "015b": "season"}[args.entry]
         sleeves = build_sleeves(names, [kind], lookbacks, continuous=(args.entry == "008"))
         res = run_book(bars, specs, trade, sleeves, args.equity, args.profile, args.stress, target_vol)
         print(portfolio_report(res))

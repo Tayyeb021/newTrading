@@ -192,3 +192,31 @@ compounding it.
 Warning 2109 ("Outside Regular Trading Hours is ignored based on the order type
 and destination") is noise: IB parks the trade in `ValidationError` while it
 processes the warning, then fills. `isDone()` correctly waits through it.
+
+### Futures gate MET, 2026-09-07 08:50 UTC
+
+Full round trip on IB paper DUT097699, contract MESU6 -> MESZ6:
+
+| step | result |
+|---|---|
+| front contract from the exchange | MESU6, last trade 2026-09-18 - matches the `third_friday` rule |
+| spec from the exchange | tick 0.25 x 5.0 = $1.25/tick - matches the hard-coded spec |
+| open with child stop | ticket 36 @ 7722.25, stop 7712.25, slippage 0.0 |
+| stop modification | 7712.25 -> 7714.75, confirmed at the broker |
+| **roll to the next contract** | **stop 7714.75 -> 7782.5, basis +67.75** |
+| close | @ 7789.5 |
+| flat | no position |
+
+The roll is the number that matters. Risk before the roll was 7.50 points;
+after it, 7.00 - the half point being the market moving between the roll and the
+close. On the previous run, with the same trade, it was 70.25 points: the same
+position carrying **9.4x the intended risk**, silently.
+
+Six bugs in four attempts, none of them findable by backtesting, and the first
+concealed by our own test double. That is the argument for connecting to the
+real venue early, and the argument against hand-rolling an adapter when a
+maintained one exists.
+
+Note for later: this account has no live data entitlement, so all of the above
+ran on a 10-15 minute delayed feed. Fills on a paper account are simulated
+regardless, so no slippage figure here is real - see the demo-fill section above.

@@ -556,7 +556,9 @@ python scripts/verify_roundtrip_ib.py                   # against TWS paper on 7
 python scripts/verify_roundtrip_ib.py --port 4002 --send  # places one micro contract. Yours to run.
 ```
 
-The path is already proven end to end on the test double: front-month
+**Gate met 2026-09-07** against IB paper DUT097699: MESU6 resolved from the exchange,
+child stop attached, stop modified, rolled to MESZ6 with the stop shifted by the
++67.75 basis, closed, flat. The path is also proven on the test double: front-month
 resolution, spec from the exchange, sizing, an order with a child stop, a stop
 modification, a roll to the next contract, close, and flat. What TWS adds is
 whether IB behaves the way the double does.

@@ -176,3 +176,22 @@ def live_account() -> dict[str, Any]:
         }
     finally:
         live.disconnect()
+
+def health() -> dict[str, Any]:
+    """Is everything that should be running actually running, and being fed?
+
+    Checks the failures that are silent: a process that died without the task
+    noticing, and an IB Gateway that is up, listening and logged out. Returns
+    each check with ok / warn / FAIL and an overall status.
+    """
+    import sys
+    sys.path.append(str(ROOT / "scripts"))
+    from healthcheck import run_checks
+    checks = run_checks()
+    worst = "FAIL" if any(c.status == "FAIL" for c in checks) else (
+        "warn" if any(c.status == "warn" for c in checks) else "ok")
+    return {
+        "status": worst,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checks": [{"name": c.name, "status": c.status, "detail": c.detail, **c.data} for c in checks],
+    }

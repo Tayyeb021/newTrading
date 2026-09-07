@@ -39,6 +39,7 @@ server = MCPServer(
 )
 
 server.tool(name="status", annotations=READ_ONLY)(mcp_tools.status)
+server.tool(name="health", annotations=READ_ONLY)(mcp_tools.health)
 server.tool(name="journal", annotations=READ_ONLY)(mcp_tools.journal)
 server.tool(name="decisions", annotations=READ_ONLY)(mcp_tools.decisions)
 server.tool(name="shadow_report", annotations=READ_ONLY)(mcp_tools.shadow_report)

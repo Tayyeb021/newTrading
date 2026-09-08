@@ -1362,3 +1362,98 @@ Seven families tested on real futures data: momentum, carry, breakout, value,
 seasonality, the machine-learning filter, and now order flow. **Two survive to a
 number**, and they are the two already in the forward record. Running total:
 **213 trials**.
+
+---
+
+## Prop evaluation fit — **not an entry, no trials**
+
+*2026-09-08. `research/prop_fit.py`, `state/prop_fit.json`, `tests/test_prop_fit.py`.
+Running total stays at 213: nothing is selected on data here. The book is
+already fixed, the rulebook is Topstep's published one, and the single free
+parameter — how much of the book's own risk to run — is swept rather than
+chosen.*
+
+The question the whole delivery plan rests on: **can the surviving book pass a
+prop evaluation, and keep the account afterwards?**
+
+Rules verified 2026-09-08, Topstep $50K Combine: profit target $3,000 (6%),
+maximum loss limit $2,000 (4%) **trailing** from the end-of-day balance and
+never moving down, daily loss limit $1,000 (optional in the Combine), best day
+capped at half the profit. Funded accounts keep the trailing limit, which locks
+at the starting balance once the account is up by the limit; payout needs five
+days of $150 or more.
+
+The book, measured over 4,104 days: **annual return 6.97%, vol 20.61%, Sharpe
+0.34, maximum drawdown 46.5%.** It must gain 6% without ever giving back 4%
+from a high-water mark. Its own history gave back **twelve times that limit**.
+
+### Two methods, one answer
+
+Every trading day in the sample as an evaluation start (4,102 real paths), and
+a 20-day block bootstrap that keeps drawdowns arriving in runs. They agree
+closely, which is the point of running both.
+
+| risk × | pass | then payable a year on | end to end |
+|---|---|---|---|
+| 1.00 | 18.8% | 13.8% | 2.6% |
+| 0.50 | 27.1% | 23.1% | 6.3% |
+| **0.25** | **32.5%** | **43.8%** | **14.2%** |
+| 0.10 | 5.0% | 29.0% | 1.4% |
+| 0.05 | 0.0% | 0.0% | 0.0% |
+
+**Best case 14.2%**, at a quarter of the book's natural risk.
+
+### The two findings that matter
+
+**The edge barely participates.** A Sharpe-0.0 strategy — the same volatility,
+no edge whatsoever — passes 27.1%. The book passes 32.5%. Five points of the
+result belong to the strategy and the rest is barrier geometry. At 0.25× risk
+the book's expected annual return is about 1.7% while the median pass takes 152
+days, so a passing account reaches +6% on volatility, not on earnings. That is
+the definition of a lottery ticket.
+
+**Both failure modes are the same pincer.** High risk reaches the target fast
+and breaches the trailing floor faster (at 1× risk, 62% die on the daily limit
+alone, median 18 days). Low risk survives everything and reaches nothing —
+below 0.10× the account is immortal and can never produce a $150 day, so it
+survives without ever being payable. There is no risk level where both work,
+because the same volatility does both jobs.
+
+### What would change the answer
+
+| Sharpe | best pass rate |
+|---|---|
+| 0.0 (null) | 27.1% |
+| 0.34 (this book) | 32.5% |
+| 0.5 | 40.6% |
+| 1.0 | 62.2% |
+| 2.0 | 83.4% |
+| 3.0 | 96.4% |
+
+An evaluation becomes a plan rather than a coin flip somewhere around Sharpe 1,
+and comfortable around 2. Sixteen entries and 213 trials have not produced 0.4.
+
+### Recorded limitations
+
+- The maximum loss limit is monitored against **intraday** equity and this
+  simulation sees only daily closes, so every number above is optimistic.
+- At $50K the book cannot hold 33 markets — one micro contract per market is
+  already too much granularity — which makes the real thing worse, not better.
+- Two readings of the consistency rule circulate; the softer one (best day
+  under half of total *profit*, dilutable) is modelled, again optimistically.
+- Rules were read from secondary sources and one Topstep help page. They must
+  be confirmed with the firm in writing before anything is built on them.
+
+### Where this leaves the plan
+
+The prop route is not closed by a bug or by a missing feature; it is closed by
+arithmetic. Evaluations select for high Sharpe over short horizons with tight
+drawdowns, and a slow trend-and-carry book is the opposite animal by
+construction — its drawdowns are how it earns. **Nothing to fix. A different
+delivery route is needed, or a different strategy class.**
+
+The one piece of good news is operational: Topstep's VPS prohibition applies to
+**order transmission**, not to computation. This machine could keep doing the
+research, signals, journaling and monitoring; only the execution leg would have
+to run from a personal PC, through a TopstepX/ProjectX adapter that does not
+exist yet. Worth building only if the arithmetic above ever changes.

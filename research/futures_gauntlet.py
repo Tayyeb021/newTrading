@@ -261,6 +261,14 @@ def verdict_012(state: Path) -> list[tuple[str, bool, str]]:
     ]
 
 
+def dump_equity(equity: pd.Series, path: str, label: str) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    eq = equity.dropna()
+    pd.DataFrame({"ts": eq.index, "equity": eq.to_numpy()}).to_parquet(out, index=False)
+    print(f"  wrote {label} equity curve: {len(eq):,} days -> {out}")
+
+
 def run_book(bars, specs, trade, sleeves, equity, profile_name, stress, target_vol: float | None = None):
     profile = RiskProfile.load(profile_name)
     engine = build_engine(profile, equity, specs, sleeves)
@@ -293,6 +301,10 @@ def main() -> int:
     ap.add_argument("--universe", choices=["core", "wide"], default="core",
                     help="core = the 33 markets of 007-011; wide = all 46 (entry 012)")
     ap.add_argument("--tag", default="", help="suffix for the output json, e.g. _wide")
+    ap.add_argument("--dump-returns", default=None,
+                    help="write the book's daily equity curve to this parquet. Only the summary "
+                         "statistics are kept otherwise, and a path-dependent question - a prop "
+                         "evaluation's trailing drawdown, say - needs the path itself")
     args = ap.parse_args()
 
     if args.entry == "012":
@@ -334,6 +346,8 @@ def main() -> int:
         print(portfolio_report(res))
         m = evaluate(res, specs, args.stress, args.trials)
         results["book"] = m
+        if args.dump_returns:
+            dump_equity(res.equity, args.dump_returns, "book")
         if args.entry in ("008", "011"):
             base_name = "gauntlet_007.json" if args.entry == "008" else "gauntlet_010.json"
             base_path = state / base_name
@@ -361,6 +375,8 @@ def main() -> int:
             print(portfolio_report(res2))
             combined = evaluate(res2, specs, args.stress, args.trials)
             results["trend_plus_carry"] = combined
+            if args.dump_returns:
+                dump_equity(res2.equity, args.dump_returns, "trend + carry")
         rows = verdict_009(m, combined, trend)
         if target_vol is not None:
             rows.append((f"vol: realised book vol within 3 points of {target_vol:.0%}",

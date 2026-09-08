@@ -1521,3 +1521,114 @@ to make the evaluation a favourite, and near 2 to make it comfortable — which
 means maximum drawdowns of 10% and 4.5% respectively, against this book's 46.5%.
 That is a short-horizon, tightly-controlled strategy: the opposite animal to a
 trend-and-carry book, whose drawdowns are how it earns.
+
+---
+
+## Per-market audit — **the measurement was wrong, and the direction is one way**
+
+*2026-09-08. `research/per_market.py`, `research/roll_bill.py`,
+`state/per_market.json`, `state/roll_bill.json`, `tests/test_per_market.py`,
+`tests/test_roll_bill.py`. Not an entry and no trials: nothing is selected on
+data. Running total stays at 213.*
+
+The question was "which instruments does this work on". Answering it required a
+per-market breakdown the harness had never kept, and building that surfaced
+three faults in the measurement itself. All three make results **too good**.
+
+### 1. No backtest has ever paid to roll a contract
+
+`backtest/portfolio.py` trades a back-adjusted continuous series. A continuous
+series contains no expiries, so a position held for three years is carried for
+free. In the market it is closed and reopened every quarter, crossing a spread
+and paying commission both ways. `data/continuous.py:154` has priced this since
+phase 4 as `roll_cost_cash`; grep shows it is called by `execution/shadow.py`
+(the live adapter) and by one print statement in `scripts/backtest_futures.py`,
+and **by no backtest**.
+
+Priced from the trade record at the 2× stress the entries declare, 1 tick per
+leg:
+
+| | |
+|---|---|
+| unpaid roll cost | **$7.79M** |
+| friction the run did charge | $3.60M |
+| the bill is | **2.2× what was charged** |
+| book net P&L | $13.27M |
+| net after the bill | **$5.48M** |
+
+**Every entry from 007 to 016 is affected in the same direction.** The worst
+markets are the ones held longest and rolled most: ZT $0.76M, HE $0.48M,
+ZC $0.45M, ZL $0.41M, ZN $0.39M. Entry 010's reported net Sharpe of 0.276 was
+computed without any of it.
+
+### 2. The book's profit is mostly unrealised
+
+Of 4,245 fills, **99 were still open at the last bar** and are marked, not
+closed. They carry **+$17.97M against a book net of +$13.27M — 135%.** The
+positions that actually closed sum to **−$4.69M**.
+
+### 3. It is one year, and ten trades
+
+**2022 alone is +$17.15M against a fifteen-year total of +$14.81M — 116%.**
+Without 2022 the book is **−$2.34M** over fourteen years. The ten best of 4,245
+trades are +$21.49M, **162% of net**.
+
+### On ZT specifically: unresolved, not an artifact
+
+The first probe called it an artifact at high confidence and two of three
+adversarial checks overturned that. Position size is frozen for the life of a
+trade (`rebalances = 0`), so a ZT short sized against 2021's zero-bound
+volatility rode the 2022 rate shock at several times its intended risk — but
+the direction was right, and ZT survives when size is refreshed under entry
+011's volatility target. Dropping ZT takes the book from **0.276 to 0.202**.
+
+The concentration is not a ZT problem. Only **9 of 33 markets are positive in
+both halves** of the sample split at 2019.
+
+### Which instruments, then
+
+Trend + carry, the four sleeves the forward record runs, over 33 markets —
+15 positive, and the rates complex (ZT, ZN, ZF, UB, ZB) is **+$17.9M of the
+book's +$20.3M, 88%**. After that: GF, 6J, GC, HO, NQ, ES. The losers are the
+FX majors (6S, 6C, 6A, 6N), the grains, silver, platinum and the Russell.
+
+### The forward record trades a different portfolio, honestly chosen
+
+`MICRO_UNIVERSE` was committed 2026-09-05 09:58 UTC — before any futures price
+file existed and three days before any per-market P&L existed anywhere. It
+excludes the single biggest winner and contains six losers out of twelve. It is
+**not** a winner-pick, and that is now asserted by a test rather than claimed.
+
+But #1, #2, #3 and #5 of the traded configuration's earners — ZT, GF, 6J, HO —
+have no micro contract and are not traded. Of the 9 markets positive in both
+halves, only 4 are in the forward book.
+
+**Carry on the 13 markets it actually trades: net Sharpe −0.213, gross P&L
+−$3.2M *before costs*, last five years −0.77, 4 of 13 markets positive, 2023
+−$1.18M, 2024 −$1.80M, 2025 −$3.01M.** This test did not exist until today.
+A sleeve whose signal is absent on its own universe is running live.
+
+**MBT (bitcoin) was never pre-registered.** It entered by enumeration: entry
+012's breadth commit added it to `MICRO_UNIVERSE` and `run_forward.py` took the
+whole dict two days later. It has since been measured at +$4.60M, **27.5% of
+the traded book's net**, on 8.7 years of history with three trades making ~90%
+of it — measured a day *after* the record started, which is post hoc.
+
+### Documentation error found
+
+RESEARCH_LOG.md:908 justifies carry with "0.32 against 0.31 for trend alone"
+and attributes it to entry 010. Those are the 46-market **wide** figures
+(0.321/0.307) from the run declared dead in entry 012. Entry 010's core numbers
+are 0.315 and 0.279.
+
+### What this changes
+
+Nothing here says the strategy is fake. It says the measurement is thinner than
+"33 markets, 15 years, Sharpe 0.28" sounds: one macro year, mostly unclosed
+positions, a third of the markets, and a cost model missing more friction than
+it charges. The harness's own `deflated_sharpe` for the traded configuration is
+**0.042**.
+
+**The fix — charging rolls in `backtest/portfolio.py` and re-running 007-016 —
+is not done here.** It changes every historical number in this log and is the
+operator's call, not a side effect of asking which instruments work.

@@ -36,7 +36,7 @@ from backtest.portfolio import (  # noqa: E402
 )
 from backtest_futures import load_expiries  # noqa: E402
 from core.config import RiskProfile  # noqa: E402
-from core.contracts import CORE_UNIVERSE, FULL_UNIVERSE, data_root, tradeable  # noqa: E402
+from core.contracts import CORE_UNIVERSE, FULL_UNIVERSE, PARENT_OF, data_root, tradeable  # noqa: E402
 from core.sleeve import Sleeve  # noqa: E402
 from data.continuous import stitch  # noqa: E402
 from ml.stats import deflated_sharpe, probability_of_backtest_overfitting, sharpe  # noqa: E402
@@ -49,6 +49,21 @@ from strategies.seasonality import Seasonality  # noqa: E402
 from strategies.tsmom import TSMOM  # noqa: E402
 
 TRIALS_SO_FAR = 213  # RESEARCH_LOG running total after 016 was declared
+
+
+def resolve_markets(requested) -> tuple[list[str], list[str]]:
+    """Requested roots -> (researchable parents, dropped), order preserved.
+
+    A micro and its full-size parent are the same market and the parent carries
+    the history, so MES resolves to ES. Anything with no history at all comes
+    back in the second list to be reported rather than silently shrinking the
+    universe.
+    """
+    wanted, absent = [], []
+    for m in requested:
+        p = PARENT_OF.get(m, m)
+        (wanted if p in FULL_UNIVERSE else absent).append(p)
+    return list(dict.fromkeys(wanted)), absent
 
 
 def load_universe(since: int, folder: Path, size_as: str, names=None):
@@ -154,6 +169,23 @@ def evaluate(result, specs, stress: float, trials: int) -> dict:
         by_sector[sector] = by_sector.get(sector, 0.0) + t.net_pnl
     out["sectors"] = by_sector
     out["positive_sectors"] = sum(1 for v in by_sector.values() if v > 0)
+
+    # Per market, not just per sector. A sector total of +$15M can be one market
+    # carrying six, and "which instruments does this actually work on" is not
+    # answerable from a bucket.
+    markets: dict[str, dict] = {}
+    for t in result.trades:
+        m = markets.setdefault(t.symbol, {"net_pnl": 0.0, "gross_pnl": 0.0,
+                                          "friction": 0.0, "trades": 0, "wins": 0,
+                                          "bucket": FULL_UNIVERSE[t.symbol].bucket})
+        m["net_pnl"] += t.net_pnl
+        m["gross_pnl"] += t.gross_pnl
+        m["friction"] += t.costs
+        m["trades"] += 1
+        m["wins"] += 1 if t.net_pnl > 0 else 0
+    out["markets"] = markets
+    out["positive_markets"] = sum(1 for v in markets.values() if v["net_pnl"] > 0)
+    out["n_markets"] = len(markets)
 
     # last five years out of sample: nothing was fitted, so this is simply the tail
     tail = eq[eq.index >= eq.index[-1] - pd.Timedelta(days=5 * 365)]
@@ -261,6 +293,21 @@ def verdict_012(state: Path) -> list[tuple[str, bool, str]]:
     ]
 
 
+def dump_trades(trades, path: str, label: str) -> None:
+    """Every fill, with the size and the dates. Needed for any question the
+    summary statistics cannot answer - what a position cost to carry across a
+    roll, for one."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{
+        "symbol": t.symbol, "sleeve": t.sleeve, "side": str(t.side), "volume": float(t.volume),
+        "entry_ts": t.entry_ts, "exit_ts": t.exit_ts, "exit_reason": str(t.exit_reason),
+        "gross_pnl": float(t.gross_pnl), "costs": float(t.costs),
+        "net_pnl": float(t.gross_pnl - t.costs),
+    } for t in trades]).to_parquet(out, index=False)
+    print(f"  wrote {label} trades: {len(trades):,} -> {out}")
+
+
 def dump_equity(equity: pd.Series, path: str, label: str) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +348,14 @@ def main() -> int:
     ap.add_argument("--universe", choices=["core", "wide"], default="core",
                     help="core = the 33 markets of 007-011; wide = all 46 (entry 012)")
     ap.add_argument("--tag", default="", help="suffix for the output json, e.g. _wide")
+    ap.add_argument("--markets", nargs="+", default=None,
+                    help="explicit market list, overriding --universe. Micro roots are mapped to "
+                         "their full-size parent for the history. Use this to measure a portfolio "
+                         "that was committed to for a non-performance reason - the forward "
+                         "record's 13 micros, say - NOT to search for a subset that scores well")
+    ap.add_argument("--dump-trades", default=None,
+                    help="write every fill to this parquet: size and dates, which the summary "
+                         "statistics do not keep")
     ap.add_argument("--dump-returns", default=None,
                     help="write the book's daily equity curve to this parquet. Only the summary "
                          "statistics are kept otherwise, and a path-dependent question - a prop "
@@ -320,6 +375,13 @@ def main() -> int:
         return 0 if passed else 1
 
     names = list(CORE_UNIVERSE if args.universe == "core" else FULL_UNIVERSE)
+    if args.markets:
+        # A micro and its parent are the same market; the parent carries the
+        # history. Anything with no history at all is dropped loudly rather
+        # than silently shrinking the universe.
+        names, absent = resolve_markets(args.markets)
+        if absent:
+            print(f"  no history for {' '.join(absent)} - dropped from the run")
     if args.entry == "015b":
         # Declared in the log: a seasonal effect without a physical mechanism
         # would be evidence of a mistake, so index, rate, FX, metal and crypto
@@ -348,6 +410,8 @@ def main() -> int:
         results["book"] = m
         if args.dump_returns:
             dump_equity(res.equity, args.dump_returns, "book")
+        if args.dump_trades:
+            dump_trades(res.trades, args.dump_trades, "book")
         if args.entry in ("008", "011"):
             base_name = "gauntlet_007.json" if args.entry == "008" else "gauntlet_010.json"
             base_path = state / base_name

@@ -161,6 +161,11 @@ class Runner:
         #: allocator's window is in daily bars, so it only serves daily legs.
         self.allocator = allocator
         self._fed: dict[str, datetime] = {}
+        #: consecutive polls with NO tick at all, and how many are tolerated
+        #: before the connection is assumed dead and rebuilt. See _heal_feed.
+        self._stale_polls = 0
+        self.stale_polls_before_reconnect = 3
+        self._tick_errors: dict[str, str] = {}
         # Legs: one (sleeve, symbol, strategy) each. A legacy symbol->strategy
         # dict becomes a single sleeve named "default".
         self.legs: list[tuple[str, str, Strategy, str]] = []
@@ -307,6 +312,7 @@ class Runner:
         # runner will happily evaluate Friday's prices all weekend. Found by
         # running shadow mode on a closed market and watching halted stay False.
         ticks = self._ticks()
+        self._heal_feed(ticks)
         feed_age = (
             min((now - t.ts).total_seconds() for t in ticks.values())
             if ticks else float("inf")
@@ -580,14 +586,66 @@ class Runner:
     # ------------------------------------------------------------------ helpers
 
     def _ticks(self) -> dict:
-        """One tick per symbol, fetched once per iteration and shared."""
+        """One tick per symbol, fetched once per iteration and shared.
+
+        Failures are swallowed on purpose: one dead symbol must not stop the
+        others. The cost of that is silence - a feed that is entirely dead
+        produces an empty dict, an infinite age and a permanent halt, with no
+        exception anywhere for the loop's error handling to react to. So the
+        emptiness is counted, and `_heal_feed` acts on it.
+        """
         out = {}
         for symbol in self.specs:
             try:
                 out[symbol] = self.adapter.tick(symbol)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                self._tick_errors[symbol] = f"{type(exc).__name__}: {exc}"
                 continue
+            self._tick_errors.pop(symbol, None)
         return out
+
+    def _heal_feed(self, ticks: dict) -> None:
+        """Reconnect when the feed has been dead for several polls running.
+
+        Found on 2026-09-08: both runners sat halted for seven hours with an
+        infinite feed age while their venue was healthy. The connection inside
+        the process had died, the terminal had not, and nothing reconnected -
+        because `_ticks` never raises, so the loop's own error path, which does
+        reconnect, was never reached. Halting on a dead feed is correct. Never
+        healing is not.
+        """
+        if ticks:
+            self._stale_polls = 0
+            return
+        self._stale_polls += 1
+        if self._stale_polls < self.stale_polls_before_reconnect:
+            return
+        self._stale_polls = 0
+
+        reconnect = getattr(self.adapter, "reconnect", None)
+        if reconnect is None:
+            connect, disconnect = getattr(self.adapter, "connect", None), getattr(self.adapter, "disconnect", None)
+            if connect is None:
+                return
+
+            def reconnect():
+                if disconnect is not None:
+                    try:
+                        disconnect()
+                    except Exception:  # noqa: BLE001 - already broken; the reconnect is what matters
+                        pass
+                connect()
+
+        try:
+            reconnect()
+            ok, detail = True, "reconnected"
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, f"{type(exc).__name__}: {exc}"
+        log.warning("feed dead for %d polls; reconnect %s",
+                    self.stale_polls_before_reconnect, "ok" if ok else f"failed: {detail}")
+        self.journal.write("feed_reconnect", ok=ok, detail=detail,
+                           polls_stale=self.stale_polls_before_reconnect,
+                           last_errors=dict(self._tick_errors))
 
     def _persist(self) -> None:
         self.state.save(self.risk.book)

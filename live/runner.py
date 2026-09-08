@@ -161,10 +161,16 @@ class Runner:
         #: allocator's window is in daily bars, so it only serves daily legs.
         self.allocator = allocator
         self._fed: dict[str, datetime] = {}
-        #: consecutive polls with NO tick at all, and how many are tolerated
-        #: before the connection is assumed dead and rebuilt. See _heal_feed.
-        self._stale_polls = 0
-        self.stale_polls_before_reconnect = 3
+        #: When the feed last delivered anything, and when the connection was
+        #: last rebuilt. Both in wall-clock time rather than polls: the forward
+        #: runner polls hourly and the shadow runner every twelve seconds, so
+        #: "three polls" meant thirty-six seconds for one and three hours for
+        #: the other, and the hourly one is the one that sat halted overnight.
+        #: See _heal_feed.
+        self._last_fed_at: datetime | None = None
+        self._last_reconnect_at: datetime | None = None
+        self.stale_seconds_before_reconnect = 120.0
+        self.reconnect_cooldown_seconds = 900.0
         self._tick_errors: dict[str, str] = {}
         # Legs: one (sleeve, symbol, strategy) each. A legacy symbol->strategy
         # dict becomes a single sleeve named "default".
@@ -312,7 +318,7 @@ class Runner:
         # runner will happily evaluate Friday's prices all weekend. Found by
         # running shadow mode on a closed market and watching halted stay False.
         ticks = self._ticks()
-        self._heal_feed(ticks)
+        self._heal_feed(ticks, now)
         feed_age = (
             min((now - t.ts).total_seconds() for t in ticks.values())
             if ticks else float("inf")
@@ -604,8 +610,8 @@ class Runner:
             self._tick_errors.pop(symbol, None)
         return out
 
-    def _heal_feed(self, ticks: dict) -> None:
-        """Reconnect when the feed has been dead for several polls running.
+    def _heal_feed(self, ticks: dict, now: datetime) -> None:
+        """Reconnect when the feed has been silent for longer than it should be.
 
         Found on 2026-09-08: both runners sat halted for seven hours with an
         infinite feed age while their venue was healthy. The connection inside
@@ -613,14 +619,33 @@ class Runner:
         because `_ticks` never raises, so the loop's own error path, which does
         reconnect, was never reached. Halting on a dead feed is correct. Never
         healing is not.
+
+        The first fix counted polls, which was the wrong unit: the same
+        threshold of three meant thirty-six seconds on the twelve-second shadow
+        loop and three hours on the hourly forward loop. The forward record then
+        lost seventeen hours on its first night. Silence is now measured against
+        the clock, from the last tick that actually arrived, so the wait is the
+        same wherever this runs.
+
+        A closed market also produces an empty feed - 7,405 of the shadow week's
+        7,595 stale-feed breaches were a weekend, not a fault - so attempts are
+        rate-limited rather than made on every poll.
         """
         if ticks:
-            self._stale_polls = 0
+            self._last_fed_at = now
             return
-        self._stale_polls += 1
-        if self._stale_polls < self.stale_polls_before_reconnect:
+        if self._last_fed_at is None:
+            # Nothing has arrived yet. Time the silence from here rather than
+            # rebuilding a connection that has not had a chance to work.
+            self._last_fed_at = now
             return
-        self._stale_polls = 0
+        silent = (now - self._last_fed_at).total_seconds()
+        if silent < self.stale_seconds_before_reconnect:
+            return
+        if (self._last_reconnect_at is not None
+                and (now - self._last_reconnect_at).total_seconds() < self.reconnect_cooldown_seconds):
+            return
+        self._last_reconnect_at = now
 
         reconnect = getattr(self.adapter, "reconnect", None)
         if reconnect is None:
@@ -641,10 +666,10 @@ class Runner:
             ok, detail = True, "reconnected"
         except Exception as exc:  # noqa: BLE001
             ok, detail = False, f"{type(exc).__name__}: {exc}"
-        log.warning("feed dead for %d polls; reconnect %s",
-                    self.stale_polls_before_reconnect, "ok" if ok else f"failed: {detail}")
+        log.warning("feed silent for %.0fs; reconnect %s",
+                    silent, "ok" if ok else f"failed: {detail}")
         self.journal.write("feed_reconnect", ok=ok, detail=detail,
-                           polls_stale=self.stale_polls_before_reconnect,
+                           silent_seconds=round(silent, 1),
                            last_errors=dict(self._tick_errors))
 
     def _persist(self) -> None:

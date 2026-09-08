@@ -220,3 +220,39 @@ maintained one exists.
 Note for later: this account has no live data entitlement, so all of the above
 ran on a 10-15 minute delayed feed. Fills on a paper account are simulated
 regardless, so no slippage figure here is real - see the demo-fill section above.
+
+---
+
+## The nightly restart, and running unattended (2026-09-08)
+
+Interactive Brokers restarts the Gateway every day. On the night of 2026-09-07
+it went down at 23:51 UTC and the forward record halted seven seconds later on
+its feed-staleness limit, correctly, and then sat halted for seven hours.
+
+Two separate faults, one predicted and one not.
+
+**Predicted: the Gateway needs restarting.** IB offers two settings under
+Configure, Lock and Exit. **Auto logoff** ends the session and requires a human
+every day. **Auto restart** performs a soft restart that keeps the session, and
+needs a human only once a week, at about 01:00 New York on Sunday. For anything
+unattended, auto restart is the only sane choice, and the difference between the
+two is one radio button. It cannot be set from outside: the Gateway writes that
+preference only after it is configured in the UI while logged in.
+
+Note also that IBC, the tool most guides recommend for automating this, was
+**retired on 1 September 2026**. The built-in auto restart is now the supported
+path.
+
+**Not predicted: a dead feed never healed.** The runner swallows per-symbol tick
+failures so one dead market cannot stop the others. When the whole feed dies
+nothing raises at all, so the loop's error path - the one that reconnects - was
+never reached, and it waited indefinitely. `Runner._heal_feed` now counts
+consecutive polls with no tick and rebuilds the connection after three. The same
+fault had silently affected MetaTrader, where the terminal was quoting one
+second old while the connection inside the process was dead.
+
+`scripts/gateway_watchdog.py` covers what auto restart does not: the process
+dying outright. It distinguishes three states, because they need different
+answers - serving, gone (relaunch it), and up-but-not-serving (only a login
+fixes that, so report and do not throw away a recoverable session). Every ten
+minutes from Task Scheduler.

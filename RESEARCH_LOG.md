@@ -1190,3 +1190,175 @@ Six families have now been tested on the futures universe: momentum, carry,
 breakout, value, seasonality, and the machine-learning filter over the top of
 momentum. Two survive to a number, and they are the two already in the forward
 record. Trials: 204.
+
+---
+
+## 016 — Order flow — **PRE-REGISTERED, declared before the data is bought**
+
+*2026-09-08. Costed first: the numbers below are Databento's own estimates, and
+nothing has been downloaded at the time of writing.*
+
+The first hypothesis class in this log that is not derived from bars. A bar says
+price went from A to B on N contracts. Trade prints say **who crossed the spread
+to make it happen**, and that difference is the raw material of every order-flow
+method. `features/orderflow.py` has existed since phase 4 and has never seen a
+real trade, because no tick feed was ever bought.
+
+**Why ES and not the micro, and not a basket.** The cheap markets are cheap
+because they trade less, and order flow needs activity: a year of micro copper
+ticks costs $3.61 for a reason. Testing there would be testing where the effect
+is least likely to exist. ES is the most liquid futures market in the world and
+where these effects are documented, so a negative on ES is informative in a way
+a negative on MHG would not be. Three months of ES front-month trades is
+$38.95 and millions of prints.
+
+**The cost of the alternatives, for the record:** MES 12 months $134.56, ES 12
+months $158.41, MNQ 12 months $352.28, and the five cheapest micros for a year
+together $82.66. About $100 of the original $125 credit remains.
+
+### The hypotheses
+
+Three claims, each standard practitioner doctrine, each tested exactly as
+entry 003's screen tested its 104: demeaned forward returns in ATR units,
+non-overlapping windows, Bonferroni across the family, and consistency required
+across sub-periods rather than in aggregate only.
+
+1. **Delta continuation.** Cumulative signed volume over the last N minutes
+   predicts the next N minutes in the same direction.
+2. **Delta divergence.** Price making a new high while cumulative delta does not
+   predicts a reversal down, and the mirror for lows.
+3. **Opening imbalance.** Signed volume in the first thirty minutes of the US
+   cash session predicts the direction of the rest of the day.
+
+Horizons 5, 15 and 60 minutes for the first two; the rest of the session for the
+third. **Nine trials.** Running total **213**.
+
+### Thresholds
+
+1. Bonferroni-corrected |t| above the bar for the family size, on non-overlapping
+   windows. Aggregate significance alone does not count.
+2. The sign consistent in at least 70% of calendar months.
+3. **Survives costs.** This is the threshold that kills intraday ideas and it is
+   stated in advance: the mean edge per trade, in ATR units, must exceed twice
+   the round-trip friction of one MES contract at the measured spread. Every
+   entry from 007 to 014 died on friction or on gross being absent; an
+   order-flow rule trades far more often than any of them.
+
+### What I expect, recorded in advance
+
+Failure, and specifically failure on threshold 3 rather than threshold 1. The
+delta effects are likely real and small - they are among the most studied
+patterns in microstructure, which is itself the reason to doubt that a retail
+account can keep any of it. If threshold 1 fails too, that is a stronger
+result: it would mean the effect is not even present before costs.
+
+Extension rule, declared now so it cannot be chosen later: if and only if a
+hypothesis passes all three thresholds on three months, the window is extended
+to twelve months on the same market before anything further is built. A pass on
+three months alone licenses more data, not a strategy.
+
+---
+
+## 016 — VERDICT: **dead, and dead exactly where it was predicted to die.**
+
+*2026-09-08. `research/orderflow_016.py`, `state/gauntlet_016.json`,
+`tests/test_orderflow_016.py`.*
+
+**29,064,201 front-month ES trade prints**, 2026-06-07 to 2026-09-04, each
+carrying Databento's aggressor flag. ESM6 was front through 2026-06-11 and ESU6
+from 2026-06-12; bars were built per contract and pooled afterwards, so no
+rolling window and no forward return crosses the June roll. 1.2M prints from
+days when a contract was not the front month were discarded rather than scored.
+
+**The spread was measured, not assumed:** 0.2500 points on both contracts —
+consecutive prints on opposite sides of the book, within a second, are a bid and
+an offer being crossed, and the median gap between them is one tick. ES is one
+tick wide essentially always. Round trip on one MES: 0.25 spread + 0.34
+commission = **0.59 ES points**, and threshold 3 therefore required an edge
+above **1.18 points**.
+
+| hypothesis | n | edge (ATR) | needs | t | hit | months + | verdict |
+|---|---|---|---|---|---|---|---|
+| delta continuation 5m | 17,659 | 0.0134 | 0.2990 | 2.51 | 50.6% | 3/4 | no signal |
+| **delta divergence 5m** | 4,520 | **0.0420** | 0.2990 | **3.88** | 52.5% | 3/4 | **real, does not pay** |
+| delta continuation 15m | 5,834 | −0.0004 | 0.1593 | −0.05 | 50.3% | 2/4 | no signal |
+| delta divergence 15m | 1,455 | 0.0392 | 0.1593 | 1.90 | 51.4% | 3/4 | no signal |
+| delta continuation 60m | 1,383 | −0.0095 | 0.0766 | −0.49 | 49.6% | 3/4 | no signal |
+| delta divergence 60m | 318 | 0.0015 | 0.0766 | 0.03 | 49.4% | 2/4 | no signal |
+| opening imbalance | 63 | −0.7619 | 0.2990 | −1.24 | 38.1% | 1/4 | no signal |
+
+**One of seven clears threshold 1. None clears all three.**
+
+### The recorded prediction was right, which is the point of recording it
+
+The pre-registration said: *"Failure, and specifically failure on threshold 3
+rather than threshold 1."* That is what happened. Five-minute delta divergence
+is statistically real — t = 3.88, p = 1.1e-4 against a Bonferroni bar of
+0.00556 — and its sign holds in three of four calendar months. It then misses
+the cost threshold by a factor of seven.
+
+### The arithmetic, in dollars, because it is the whole result
+
+The edge is 0.0420 ATR at a median 5-minute ATR of 3.95 points: **0.166 ES
+points per trade, two-thirds of one tick.** On one MES contract that is **83
+cents of gross edge**. The round trip costs **$2.95** — $1.25 of spread and
+$1.70 of commission. Every trade loses $2.12. The rule fired 4,520 times in 63
+sessions, seventy-two times a day, so trading it on a single micro contract
+would have lost roughly **$9,600 over the three months** while being right 52.5%
+of the time.
+
+**And the spread is not what kills it.** Commission alone is 0.34 points against
+a gross edge of 0.166 — **twice the edge, before crossing anything.** A perfect
+passive fill on both sides of every trade, which is not available to a signal
+that requires immediacy, would still lose money. There is no execution
+improvement that rescues this; the gap is structural.
+
+### Delta continuation is not merely unaffordable, it is absent
+
+At 15 and 60 minutes the t-statistics are −0.05 and −0.49. At 5 minutes t = 2.51
+fails Bonferroni on its own and the edge is 0.05 points — one fifth of a tick.
+The most widely repeated claim in retail order-flow teaching does not survive
+contact with thirty million real prints even before costs are considered.
+
+Opening imbalance is worse than absent: the sign is wrong, 38.1% hit over 63
+sessions, and not significant either way. Worth noting that the raw US cash
+session in this window drifted **−0.75 ATR**, which is exactly the kind of
+sample drift that would have flattered a short-biased reading had the returns
+not been demeaned.
+
+### Limitations, recorded rather than buried
+
+- **Three months is short.** Threshold 2 asked for consistency across 70% of
+  calendar months and there were only four, one of them four days long. A
+  month-consistency test on four months is weak evidence in either direction.
+  The extension rule existed precisely for this and was not triggered.
+- **Seven tests were run against a Bonferroni denominator of nine.** The
+  declaration counted three horizons for all three hypotheses; the third has
+  only one horizon. The denominator was left at the declared nine, which is the
+  conservative direction, rather than adjusted after seeing the results.
+- **`delta_divergence` uses `>=`,** so a close equal to the 20-bar high counts
+  as a new high. That is why the rule fires on 25% of bars rather than about
+  10%. It is the tested library function as written since phase 4 and it was
+  not changed after the numbers appeared.
+- **Burn-in was 50 bars, not the 300 of entry 003's screen,** because the
+  longest lookback here is 20 bars rather than 250. On hourly bars, 300 would
+  have discarded twelve days of a ninety-day sample.
+
+### What this licenses: nothing
+
+The extension rule was declared in advance — twelve months of data only if a
+hypothesis passed all three thresholds. None did. No further data is bought,
+`features/orderflow.py` gains no caller, and no order-flow sleeve is built.
+About $62 of the Databento credit remains and is not spent on this.
+
+For order flow to be worth revisiting on a retail account, the five-minute edge
+would need to be above roughly 0.30 ATR — four and a half times what thirty
+million prints actually contain — or the cost structure would need to be one no
+retail futures account can obtain. Neither is a research problem.
+
+### Where this leaves the research
+
+Seven families tested on real futures data: momentum, carry, breakout, value,
+seasonality, the machine-learning filter, and now order flow. **Two survive to a
+number**, and they are the two already in the forward record. Running total:
+**213 trials**.

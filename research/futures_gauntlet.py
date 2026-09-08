@@ -48,7 +48,7 @@ from strategies.breakout import Breakout  # noqa: E402
 from strategies.seasonality import Seasonality  # noqa: E402
 from strategies.tsmom import TSMOM  # noqa: E402
 
-TRIALS_SO_FAR = 204  # RESEARCH_LOG running total after 014 was declared
+TRIALS_SO_FAR = 213  # RESEARCH_LOG running total after 016 was declared
 
 
 def load_universe(since: int, folder: Path, size_as: str, names=None):

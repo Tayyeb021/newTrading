@@ -22,3 +22,7 @@ venv/
 
 # Purchased exchange history (Databento); licence forbids redistribution
 data/futures/
+
+# Tick prints - 230 MB for three months of one market, bought from Databento
+# and re-fetchable with scripts/download_ticks.py.
+data/ticks/

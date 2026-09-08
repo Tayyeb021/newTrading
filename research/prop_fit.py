@@ -180,7 +180,10 @@ def survive(rets: np.ndarray, rules: Rules, k: float, paths: int, horizon: int =
         for day, r in enumerate(path, start=1):
             start_of_day = equity
             equity *= 1.0 + k * r
-            floor = rules.account if locked else high_water - rules.mll
+            if rules.trailing:
+                floor = rules.account if locked else high_water - rules.mll
+            else:
+                floor = rules.account - rules.mll   # a static floor never moves
             if equity <= floor:
                 died = day
                 break
@@ -204,6 +207,27 @@ def survive(rets: np.ndarray, rules: Rules, k: float, paths: int, horizon: int =
         "p_payable_1y": payable / paths,
         "median_days_alive": float(np.median(lifetimes)) if lifetimes else float("nan"),
     }
+
+
+def best_pass(rets: np.ndarray, rules: Rules, risks: np.ndarray, paths: int, **kw) -> dict:
+    """Highest pass rate this series can reach under these rules, and how the
+    rest of the paths died - without the breakdown a loosened drawdown limit
+    can look ineffective when the daily limit is what is actually binding."""
+    rows = [bootstrap(rets, rules, k, paths, **kw) for k in risks]
+    return max(rows, key=lambda x: x["p_pass"])
+
+
+def reshape(rules: Rules, **changes) -> Rules:
+    return Rules(**{**rules.__dict__, **changes})
+
+
+def profile(rets: np.ndarray, k: float) -> tuple[float, float]:
+    """Annual vol and max drawdown of the series at risk multiple k - the two
+    numbers a rulebook actually constrains."""
+    scaled = rets * k
+    vol = float(np.std(scaled, ddof=1) * np.sqrt(252))
+    eq = np.cumprod(1 + scaled)
+    return vol, float(np.max(1 - eq / np.maximum.accumulate(eq)))
 
 
 def synthetic(sharpe: float, vol: float, n: int) -> np.ndarray:
@@ -307,6 +331,59 @@ def main() -> int:
         print(f"{s:>8.1f}{b['risk_multiple']:>9.2f}{b['p_pass']:>9.1%}"
               f"{b['p_fail_max_loss']:>11.1%}{b['p_timeout']:>10.1%}{days:>9}")
 
+    print(f"\nWHAT A PASSING STRATEGY LOOKS LIKE - the shape, not just the Sharpe")
+    print("=" * 78)
+    print("  Vol and drawdown are quoted at the risk level that maximises the pass rate,")
+    print("  so this is the profile the rulebook is actually asking for.")
+    print(f"{'Sharpe':>8}{'risk x':>9}{'ann vol':>10}{'max DD':>9}{'pass':>9}")
+    window = len(rets)   # drawdowns are only comparable over comparable windows
+    for s in (0.0, round(sharpe, 2), 0.5, 1.0, 2.0, 3.0):
+        syn = rets if abs(s - round(sharpe, 2)) < 1e-9 else synthetic(s, ann_vol, 40_000)
+        b = best_pass(syn, r, risks, args.paths)
+        v, dd = profile(syn[:window], b["risk_multiple"])
+        print(f"{s:>8.2f}{b['risk_multiple']:>9.2f}{v:>10.1%}{dd:>9.1%}{b['p_pass']:>9.1%}")
+
+    print(f"\nOR A DIFFERENT RULEBOOK - the same book, other shapes of evaluation")
+    print("=" * 78)
+    print("  The daily limit is varied alongside the drawdown, because at higher risk it")
+    print("  becomes the binding rule and a loosened drawdown alone looks useless.")
+    print("  Everything the book does stays exactly as measured.")
+    print(f"{'max loss':>10}{'trailing':>11}{'trail,no-DL':>14}{'static':>10}"
+          f"{'static,no-DL':>15}")
+    # A wider drawdown allowance is only worth having if you can use it, so the
+    # risk grid has to reach past the book's own natural size.
+    wide = np.array([4.0, 2.0, 1.0, 0.5, 0.25, 0.10])
+    shapes = []
+    for mll_pct in (0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30):
+        cells = []
+        for trailing in (True, False):
+            for daily in (True, False):
+                rules = reshape(r, mll=r.account * mll_pct, trailing=trailing)
+                b = best_pass(rets, rules, wide, args.paths, use_daily_limit=daily)
+                shapes.append({"mll_pct": mll_pct, "trailing": trailing, "daily_limit": daily,
+                               "p_pass": b["p_pass"], "risk_multiple": b["risk_multiple"],
+                               "p_fail_max_loss": b["p_fail_max_loss"],
+                               "p_fail_daily": b["p_fail_daily"]})
+                cells.append(b["p_pass"])
+        print(f"{mll_pct:>10.0%}{cells[0]:>11.1%}{cells[1]:>14.1%}{cells[2]:>10.1%}{cells[3]:>15.1%}")
+
+    reachable = [s for s in shapes if s["p_pass"] >= 0.50]
+    if reachable:
+        cheapest = min(reachable, key=lambda s: s["mll_pct"])
+        print(f"\n  An even chance needs a {cheapest['mll_pct']:.0%} drawdown allowance "
+              f"({'trailing' if cheapest['trailing'] else 'static'}, "
+              f"{'with' if cheapest['daily_limit'] else 'without'} a daily limit) - "
+              f"{cheapest['mll_pct'] / r.mll_pct:.0f}x what Topstep gives.")
+        worst = [s for s in shapes if s["mll_pct"] == r.mll_pct and s["trailing"] and s["daily_limit"]][0]
+        no_dl = [s for s in shapes if s["mll_pct"] == 0.10 and s["trailing"] and not s["daily_limit"]][0]
+        print(f"  The daily limit costs more than the drawdown does: at a 10% allowance it is")
+        print(f"  {no_dl['p_pass']:.0%} without one against {[s for s in shapes if s['mll_pct'] == 0.10 and s['trailing'] and s['daily_limit']][0]['p_pass']:.0%} with, while widening 4% to 30% under a daily")
+        print(f"  limit only moves {worst['p_pass']:.0%} to about half. Which firms actually offer a static")
+        print(f"  allowance and no daily limit is a question for their rulebooks, not this file.")
+    else:
+        print(f"\n  No shape tested reaches an even chance, daily limit or not. A {max_dd:.0%}")
+        print(f"  drawdown is not a rulebook problem.")
+
     print(f"\nVERDICT")
     print("=" * 78)
     # The two stages must be judged at the SAME risk level. Reading the best
@@ -323,6 +400,23 @@ def main() -> int:
     joint = p_pass_best * p_pay_best
     print(f"\n  Best end to end: {joint:.1%} at {k_best:.2f}x risk "
           f"({p_pass_best:.1%} pass, then {p_pay_best:.1%} still funded and payable a year on).")
+
+    # The same two stages under the rule shape the sweep above says suits this
+    # book: a static allowance and no daily limit. Firms with that shape exist,
+    # so this is a real comparison rather than a hypothetical one.
+    friendly = reshape(r, mll=r.account * 0.08, trailing=False)
+    print(f"\n  The same book under a STATIC 8% allowance with no daily limit:")
+    print(f"{'risk x':>8}{'pass':>9}{'x payable':>12}{'= end to end':>15}")
+    best_friendly = (0.0, 0.0, 0.0)
+    for k in risks:
+        p = bootstrap(rets, friendly, k, args.paths, use_daily_limit=False)["p_pass"]
+        s = survive(rets, friendly, k, max(2000, args.paths // 5))["p_payable_1y"]
+        print(f"{k:>8.2f}{p:>9.1%}{s:>12.1%}{p * s:>15.1%}")
+        if p * s > best_friendly[1] * best_friendly[2]:
+            best_friendly = (k, p, s)
+    kf, pf_, sf = best_friendly
+    print(f"\n  Best end to end there: {pf_ * sf:.1%} at {kf:.2f}x risk, against "
+          f"{joint:.1%} at Topstep.")
     if joint < 0.10:
         print(f"  A lottery, not a plan. The pincer is that the risk which reaches a "
               f"{r.target_pct:.0%} target")

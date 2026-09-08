@@ -1457,3 +1457,67 @@ The one piece of good news is operational: Topstep's VPS prohibition applies to
 research, signals, journaling and monitoring; only the execution leg would have
 to run from a personal PC, through a TopstepX/ProjectX adapter that does not
 exist yet. Worth building only if the arithmetic above ever changes.
+
+### Correction, same day: it is partly a rulebook problem after all
+
+The first version of the sweep above varied the drawdown allowance while
+leaving the $1,000 daily loss limit in place. At any risk large enough to use a
+wider allowance the daily limit became the binding rule, so widening the
+drawdown looked useless and the section concluded "no shape tested reaches an
+even chance". That conclusion was an artifact of the confound, and it was
+wrong.
+
+Varying both, with a risk grid wide enough to actually use the allowance:
+
+| max loss | trailing | trailing, no daily limit | static | static, no daily limit |
+|---|---|---|---|---|
+| 4% (Topstep) | 32.7% | 34.6% | 43.3% | 47.8% |
+| 6% | 42.7% | 47.5% | 44.9% | 58.8% |
+| 8% | 44.8% | 58.1% | 46.7% | **65.6%** |
+| 10% | 46.5% | 64.3% | 46.7% | 67.6% |
+| 20% | 47.7% | 76.7% | 48.8% | 80.0% |
+
+**The daily loss limit costs more than the drawdown does.** At a 10% allowance
+the book passes 64.3% without a daily limit against 46.5% with one, while
+widening 4% to 30% *under* a daily limit only moves 32.7% to about half.
+
+End to end — pass, then still be funded and payable a year later — under a
+static 8% allowance with no daily limit:
+
+| risk × | pass | payable a year on | end to end |
+|---|---|---|---|
+| 1.00 | 59.6% | 43.5% | 25.9% |
+| **0.50** | **64.6%** | **70.5%** | **45.5%** |
+| 0.25 | 46.6% | 95.3% | 44.4% |
+
+**45.5% against 14.0% at Topstep — a 3.3× improvement from changing the firm,
+not the strategy.** Futures firms with end-of-day or static drawdown and no
+daily loss cap do exist; several were named in a 2026 comparison. Which of them
+permit automation, and under what execution-location rules, is unverified and
+is the next thing to check.
+
+This does not make the route a business — 45% is a fair coin rather than a
+losing one, and the earlier findings stand: the edge contributes about five
+points of the pass rate, and everything here is optimistic because the
+simulation sees only daily closes.
+
+### What a passing strategy looks like, if the rulebook cannot be changed
+
+Under Topstep's own rules, at the risk level that maximises the pass rate:
+
+| Sharpe | annual vol | max drawdown | pass |
+|---|---|---|---|
+| 0.00 (null) | 10.4% | 38.6% | 25.1% |
+| **0.34 (this book)** | 5.2% | 13.8% | 33.3% |
+| 0.50 | 5.1% | 15.9% | 36.4% |
+| 1.00 | 5.2% | 9.7% | 60.4% |
+| 2.00 | 5.1% | 4.5% | 81.2% |
+| 3.00 | 2.1% | 1.8% | 95.9% |
+
+The volatility column is nearly constant at about 5%, and that is the finding:
+**the rules dictate the size, so the only free variable is Sharpe.** Whatever is
+traded must run at roughly 5% annualised volatility and needs a Sharpe near 1
+to make the evaluation a favourite, and near 2 to make it comfortable — which
+means maximum drawdowns of 10% and 4.5% respectively, against this book's 46.5%.
+That is a short-horizon, tightly-controlled strategy: the opposite animal to a
+trend-and-carry book, whose drawdowns are how it earns.

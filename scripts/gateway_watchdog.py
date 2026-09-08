@@ -47,6 +47,19 @@ PORT = 4002
 
 SERVING, GONE, NOT_SERVING = "serving", "gone", "up_but_not_serving"
 
+def _quiet_ib_noise() -> None:
+    """Silence the delayed-data warning ib_async logs on every quote.
+
+    Error 354 is not an error here - this account has no live subscription and
+    the adapter deliberately falls back to delayed. Left alone it writes four
+    lines every ten minutes forever, and a log nobody can read is a log nobody
+    reads.
+    """
+    import logging
+    for name in ("ib_async", "ib_async.wrapper", "ib_async.client", "ib_insync"):
+        logging.getLogger(name).setLevel(logging.CRITICAL)
+
+
 
 def process_running() -> bool:
     try:
@@ -59,6 +72,7 @@ def process_running() -> bool:
 
 def probe() -> tuple[str, str]:
     """Which of the three states are we in, and why."""
+    _quiet_ib_noise()
     if not process_running():
         return GONE, "no ibgateway.exe process"
     try:

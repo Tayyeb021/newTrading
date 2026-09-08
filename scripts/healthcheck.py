@@ -30,6 +30,19 @@ from ops.journal import Journal  # noqa: E402
 
 OK, WARN, FAIL = "ok", "warn", "FAIL"
 
+def _quiet_ib_noise() -> None:
+    """Silence the delayed-data warning ib_async logs on every quote.
+
+    Error 354 is not an error here - this account has no live subscription and
+    the adapter deliberately falls back to delayed. Left alone it writes four
+    lines every ten minutes forever, and a log nobody can read is a log nobody
+    reads.
+    """
+    import logging
+    for name in ("ib_async", "ib_async.wrapper", "ib_async.client", "ib_insync"):
+        logging.getLogger(name).setLevel(logging.CRITICAL)
+
+
 
 @dataclass
 class Check:
@@ -80,6 +93,7 @@ def journal_freshness(path: Path, label: str, max_age_minutes: float) -> Check:
 
 def gateway_check() -> Check:
     """Up is not the same as logged in. Ask it for an account and a price."""
+    _quiet_ib_noise()
     if not _process_up("ibgateway.exe"):
         return Check("IB Gateway", FAIL, "process is not running")
     try:

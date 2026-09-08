@@ -71,6 +71,56 @@ class ShadowAdapter(PaperAdapter):
         return self._live.spec(symbol)
 
 
+class LiveMTFPullback(MTFPullback):
+    """MTFPullback with its higher-timeframe bias refreshed from the live feed.
+
+    Found 2026-09-08, after the shadow week produced 13,283 heartbeats and not a
+    single decision in four days. `MTFPullback.prepare` builds its bias from
+    `self.bias_frames`; with that dict empty it sets `bias = 0`, and
+    `evaluate` returns FLAT on `bias == 0` before reading anything else. So a
+    strategy constructed without bias frames cannot signal - ever, on any bar,
+    in any market.
+
+    Every backtest script passes `bias_frames=load_bias_frames(...)` and every
+    test passes them explicitly. `scripts/shadow.py` - the only caller that runs
+    live - passed none. The rule was validated in one configuration and deployed
+    in another that is structurally incapable of trading, and nothing failed:
+    the process ran, the feed was healthy, the journal filled with heartbeats.
+
+    The runner fetches one timeframe per leg (`live/runner.py:_intent`), so the
+    higher frames have to be pulled here, and pulled on every bar rather than
+    snapshotted at startup - a bias frozen at Monday's open is a different bug
+    with the same shape.
+    """
+
+    def __init__(self, adapter, symbol: str, bars_per_frame: int = 400, **kw) -> None:
+        super().__init__(**kw)
+        self._adapter = adapter
+        self._symbol = symbol
+        self._bars_per_frame = bars_per_frame
+
+    def prepare(self, df):
+        import pandas as pd
+
+        frames = {}
+        for tf in tuple(self.bias_timeframes) + ((self.stop_timeframe,) if self.stop_timeframe else ()):
+            if tf in frames:
+                continue
+            try:
+                bars = self._adapter.bars(self._symbol, tf, count=self._bars_per_frame)
+            except Exception as exc:  # noqa: BLE001
+                # A missing higher timeframe means no bias, which means no
+                # trades. Say so rather than trading blind or silently flat.
+                print(f"  [bias] {self._symbol} {tf}: {type(exc).__name__}: {exc}", flush=True)
+                continue
+            if bars:
+                frames[tf] = pd.DataFrame([{
+                    "ts": b.ts, "open": b.open, "high": b.high,
+                    "low": b.low, "close": b.close, "volume": b.volume} for b in bars])
+        self.bias_frames = frames
+        return super().prepare(df)
+
+
 def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%m-%d %H:%M:%S")
 
@@ -120,8 +170,8 @@ def main() -> int:
     engine = build_engine(profile, account.equity, specs)
     runner = Runner(
         adapter=shadow, risk=engine,
-        strategies={s: MTFPullback(execution_timeframe=args.timeframe,
-                                   bias_timeframes=("H4", "H1")) for s in symbols},
+        strategies={s: LiveMTFPullback(shadow, s, execution_timeframe=args.timeframe,
+                                       bias_timeframes=("H4", "H1")) for s in symbols},
         specs=specs, timeframe=args.timeframe, poll_seconds=args.poll,
         state=StateStore("state/shadow_session.json"),
         journal=Journal("state/shadow_journal.jsonl"),

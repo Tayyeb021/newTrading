@@ -1632,3 +1632,50 @@ it charges. The harness's own `deflated_sharpe` for the traded configuration is
 **The fix — charging rolls in `backtest/portfolio.py` and re-running 007-016 —
 is not done here.** It changes every historical number in this log and is the
 operator's call, not a side effect of asking which instruments work.
+
+---
+
+## Shadow week: four days, 13,283 heartbeats, zero decisions
+
+*2026-09-08. `scripts/why_no_decision.py`, `tests/test_shadow_can_signal.py`.
+An operational fault, not a research entry. No trials.*
+
+The shadow week ran from 2026-09-05, logged 13,283 heartbeats, and made **not
+one decision**. The feed was healthy, the process was up, the journal was
+filling, the health check was green.
+
+**`MTFPullback` cannot signal without higher-timeframe bias frames.**
+`prepare()` builds its bias from `self.bias_frames`; with that dict empty it
+sets `bias = 0`, and `evaluate()` returns FLAT on `bias == 0` before it reads
+location, trigger or session. Every backtest script passes
+`bias_frames=load_bias_frames(...)`. Every test passes them explicitly.
+`scripts/shadow.py` — **the only caller that runs live** — passed none.
+
+The rule was validated in one configuration and deployed in another that is
+structurally incapable of trading. Measured on stored history rather than
+argued: **zero signals in 993,548 bar evaluations** across EURUSD, XAUUSD, US30
+and US500, up to 28 years each. Not a selective rule having a quiet week — a
+rule that cannot fire.
+
+Nothing failed. No exception, no warning, no missing file. The runner fetches
+one timeframe per leg (`live/runner.py:_intent`), handed it to a strategy that
+needed three, and the strategy answered "no trade" every time, correctly, given
+what it was given.
+
+**Fixed** with `LiveMTFPullback` in `scripts/shadow.py`: it pulls H4 and H1 from
+the live adapter inside `prepare()`, on every bar rather than snapshotted at
+startup — a bias frozen at Monday's open is the same bug wearing a different
+hat. On the live feed after the fix, bias is non-zero on 79% of bars and the
+rule produced 5 entries across four symbols in 30 hours.
+
+Five tests pin it, including the control that makes the first one mean
+something: the same rule on the same bars, differing only in whether bias frames
+were supplied, goes from 0 signals to many. Writing that control took three
+attempts — the fixture was too short for an H4 EMA, and its wicks were wider
+than its largest bar-to-bar move, so the entry trigger `close > prev.high` could
+never fire. A test fixture that cannot produce the behaviour it is testing for
+is the same failure as the bug it was written to catch.
+
+**The running process still has the old code.** Restarting it changes what the
+declared 2026-09-06 → 09-11 shadow week measured, so it is left for the operator
+to decide.

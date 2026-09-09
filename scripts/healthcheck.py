@@ -147,8 +147,11 @@ def run_checks() -> list[Check]:
                             {"pids": shadow}))
         if shadow:
             checks.append(journal_freshness(state / "shadow_journal.jsonl", "shadow week heartbeat", 15))
-        checks.append(Check("MetaTrader 5", OK if _process_up("terminal64.exe") else FAIL,
-                            "running" if _process_up("terminal64.exe") else "not running - shadow cannot see prices"))
+        up = _process_up("terminal64.exe")
+        checks.append(Check("MetaTrader 5", OK if up else FAIL,
+                            "running (TradingMT5Watchdog relaunches it within 10 min)" if up
+                            else "not running - shadow cannot see prices; the watchdog should "
+                                 "relaunch it within 10 min"))
         checks.append(kill_switch(state / "SHADOW_KILL", "shadow kill switch"))
 
     try:

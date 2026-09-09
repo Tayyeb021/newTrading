@@ -112,6 +112,35 @@ def gateway_section(cutoff: datetime) -> list[str]:
     return lines
 
 
+def mt5_section(cutoff: datetime) -> list[str]:
+    """MetaTrader's night, on the same footing as the Gateway's.
+
+    Added 2026-09-09. On the night of the 8th the terminal vanished, the shadow
+    week sat halted for hours with no prices, and this report said nothing at
+    all about it - because MetaTrader had no watchdog and therefore no journal.
+    """
+    path = STATE / "mt5_watchdog.jsonl"
+    if not path.exists():
+        return ["- **MetaTrader 5**: no problem ever recorded - the watchdog only writes failures"]
+    events = _in_window(Journal(path).read(), cutoff)
+    if not events:
+        return ["- **MetaTrader 5**: clean night, nothing to report"]
+
+    states: dict[str, int] = {}
+    for e in events:
+        states[e.get("state", "?")] = states.get(e.get("state", "?"), 0) + 1
+    lines = [f"- **MetaTrader 5**: {len(events)} problem checks - " +
+             ", ".join(f"{k} {v}" for k, v in states.items())]
+    lines.append(f"    first {events[0]['ts'][11:16]}, last {events[-1]['ts'][11:16]} UTC")
+    if states.get("gone"):
+        lines.append("    The terminal process vanished and the watchdog relaunched it. It")
+        lines.append("    normally restores its own login, so this usually needs no one.")
+    if states.get("up_but_not_serving"):
+        lines.append("    **The terminal is up but refusing the API.** A human must open the")
+        lines.append("    MetaTrader window, sign in, and check Algo Trading is enabled.")
+    return lines
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--hours", type=float, default=None,
@@ -126,6 +155,7 @@ def main() -> int:
 
     lines = [f"## Overnight {cutoff:%Y-%m-%d %H:%M} -> {now:%m-%d %H:%M} UTC ({hours:.0f}h)", ""]
     lines += gateway_section(cutoff)
+    lines += mt5_section(cutoff)
     lines += runner_section(STATE / "forward_journal.jsonl", "forward record", 60, cutoff)
     lines += runner_section(STATE / "shadow_journal.jsonl", "shadow week", 0.2, cutoff)
 

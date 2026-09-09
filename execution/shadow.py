@@ -52,6 +52,31 @@ class ShadowAdapter(PaperAdapter):
         self._front: dict[str, tuple[int, int]] = {}
         self.rolls: list[dict] = []
 
+    def reconnect(self) -> None:
+        """Rebuild the LIVE link, which is the only half that can break.
+
+        Found 2026-09-09. `Runner._heal_feed` reconnects a dead feed, and with
+        no `reconnect` here it fell back to `connect()` - inherited from
+        `PaperAdapter`, which reconnects the paper book. The paper book never
+        fails. So the healer bounced the half that was fine, left the broker
+        link dead, and journalled `ok=True, "reconnected"` each time: the
+        forward record logged ten such successes overnight while halted for
+        91% of it, and the shadow week four over 92 minutes of silence.
+
+        A reconnect that reports success while fixing nothing is worse than no
+        reconnect at all, because the journal then says it healed.
+
+        `connect()` is deliberately not overridden: the callers connect the
+        live adapter themselves before constructing this one, and reaching in
+        at startup would double-connect.
+        """
+        try:
+            self._live.disconnect()
+        except Exception:  # noqa: BLE001 - already broken; the reconnect is what matters
+            pass
+        self._live.connect()
+        super().connect()
+
     # ------------------------------------------------------------------ reads
 
     def tick(self, symbol: str) -> Tick:

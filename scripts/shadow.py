@@ -59,6 +59,24 @@ class ShadowAdapter(PaperAdapter):
     def connect(self) -> None:
         super().connect()
 
+    def reconnect(self) -> None:
+        """Rebuild the LIVE link, which is the only half that can break.
+
+        Found 2026-09-09, the morning after the MetaTrader terminal vanished.
+        `Runner._heal_feed` had no `reconnect` to call here, so it fell back to
+        `connect()` - which is `PaperAdapter.connect`, the paper book, which
+        never fails. It bounced the healthy half every fifteen minutes and
+        journalled `ok=True, "reconnected"` while every symbol was still
+        returning `IPC send failed` and the runner stayed halted for 92 minutes
+        after MetaTrader was already back and serving.
+        """
+        try:
+            self._live.disconnect()
+        except Exception:  # noqa: BLE001 - already broken; the reconnect is what matters
+            pass
+        self._live.connect()
+        super().connect()
+
     def tick(self, symbol):
         t = self._live.tick(symbol)
         self.feed_tick(t)  # keep the paper book marked to real prices
